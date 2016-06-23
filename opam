@@ -12,6 +12,15 @@ depends: [
   "ocamlfind" {build}
   "ocamlbuild" {build}
   "topkg" {build}
+  "core"
+  "async"
+  "bs_devkit"
+  "nocrypto"
+  "hex"
+  "dtc"
+  "cohttp"
+  "websocket"
+  "wamp"
 ]
 depopts: []
 build:
