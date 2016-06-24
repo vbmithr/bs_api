@@ -250,11 +250,15 @@ module Ws = struct
     data: Yojson.Safe.json list;
   } [@@deriving show, yojson]
 
+  type query = {
+    op: string;
+    args: Yojson.Safe.json;
+  } [@@deriving yojson]
 
   let uri = Uri.with_path uri "realtime"
   let testnet_uri = Uri.with_path testnet_uri "realtime"
 
-  let with_connection ?(stop_f=Fn.const false) ?(query_params=[]) ?log ?auth ~testnet ~topics ~on_ws_msg () =
+  let with_connection ?(stop_f=Fn.const false) ?(query_params=[]) ?log ?auth ?to_ws ~testnet ~topics ~on_ws_msg () =
     let uri = if testnet then testnet_uri else uri in
     let auth_params = match auth with
       | None -> []
@@ -278,6 +282,13 @@ module Ws = struct
         else return (r, w)
       end >>= fun (r, w) ->
       let ws_r, ws_w = Websocket_async.client_ez ?log ~heartbeat:(sec 25.) uri s r w in
+      Option.iter to_ws ~f:(fun to_ws ->
+          don't_wait_for @@ Pipe.transfer to_ws ws_w ~f:(fun q ->
+              let q_str = (q |> query_to_yojson |> Yojson.Safe.to_string) in
+              maybe_debug log "-> %s" q_str;
+              q_str
+            )
+        );
       let cleanup () =
         Pipe.close_read ws_r;
         Deferred.all_unit [Reader.close r; Writer.close w]
