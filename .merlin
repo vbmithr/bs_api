@@ -1,4 +1,12 @@
 PKG bytes
+PKG core
+PKG async
+PKG cohttp.async
+PKG websocket
+PKG ppx_deriving_yojson
+PKG hex
+PKG bs_devkit
+PKG dtc
 S src
 S test
 B _build/**
