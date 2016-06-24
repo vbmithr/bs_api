@@ -384,10 +384,10 @@ let execInst_of_dtc ord_type tif stop_exec_inst =
   | #Dtc.time_in_force -> List.map execInst ~f:(fun ei -> "execInst", `String ei)
 
 type update_action =
-  | Partial
-  | Insert
-  | Update
-  | Delete
+  | Partial [@printer fun fmt _ -> Format.pp_print_string fmt "Partial"]
+  | Insert [@printer fun fmt _ -> Format.pp_print_string fmt "Insert"]
+  | Update [@printer fun fmt _ -> Format.pp_print_string fmt "Update"]
+  | Delete [@printer fun fmt _ -> Format.pp_print_string fmt "Delete"]
   [@@deriving show]
 
 let update_action_of_string = function
