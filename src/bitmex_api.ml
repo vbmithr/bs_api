@@ -253,7 +253,7 @@ module Ws = struct
   type query = {
     op: string;
     args: Yojson.Safe.json;
-  } [@@deriving yojson]
+  } [@@deriving create,yojson]
 
   let uri = Uri.with_path uri "realtime"
   let testnet_uri = Uri.with_path testnet_uri "realtime"
