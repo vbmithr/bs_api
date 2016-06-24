@@ -293,7 +293,6 @@ module Ws = struct
         Pipe.close_read ws_r;
         Deferred.all_unit [Reader.close r; Writer.close w]
       in
-      Pipe.close ws_w;
       maybe_info log "[WS] connecting to %s" uri_str;
       let pipe_f msg = try on_ws_msg msg with exn -> maybe_error log "%s" Exn.(backtrace ()) in
       Monitor.protect ~finally:cleanup (fun () -> Pipe.iter_without_pushback ws_r ~f:pipe_f)
