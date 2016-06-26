@@ -141,21 +141,22 @@ module Rest = struct
       let status_code = C.Code.code_of_status status in
       if C.Code.is_success status_code then begin
         maybe_debug log "<- %s" body_str;
-        Deferred.Or_error.return body_str
+        return body_str
       end
       else if C.Code.is_client_error status_code then begin
         match error_of_yojson Yojson.Safe.(from_string body_str) with
-        | `Ok { error = { name; message }} -> Deferred.Or_error.errorf "%s: %s" name message
-        | `Error _ -> Deferred.Or_error.errorf "%s: json error" name
+        | `Ok { error = { name; message }} ->
+          failwithf "%s: %s" name message ()
+        | `Error _ ->
+          failwithf "%s: json error" name ()
       end
       else if C.Code.is_server_error status_code then begin
         maybe_error log "%s: %s" name (C.Code.sexp_of_status_code status |> Sexplib.Sexp.to_string_hum);
         after @@ Time.Span.of_int_sec 1 >>=
         inner
       end
-      else
-        Deferred.Or_error.errorf "%s: Unexpected HTTP return status %s"
-          name (C.Code.sexp_of_status_code status |> Sexplib.Sexp.to_string_hum)
+      else failwithf "%s: Unexpected HTTP return status %s"
+          name (C.Code.sexp_of_status_code status |> Sexplib.Sexp.to_string_hum) ()
     in
     inner ()
 
