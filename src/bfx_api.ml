@@ -117,7 +117,7 @@ module Rest = struct
               invalid_arg msg
           end
           with exn ->
-            maybe_debug log "%s" Exn.(backtrace ());
+            maybe_debug log "%s" (Exn.to_string exn);
             None
         in
         List.rev_filter_map ts ~f:filter_map_f
@@ -631,14 +631,15 @@ module Ws = struct
           maybe_debug log "-> %s" ev_str;
           Pipe.write ws_w ev_str
         ) >>= fun () ->
-      let pipe_f msg = try on_ws_msg msg with exn -> maybe_error log "%s" Exn.(backtrace ()) in
+      let pipe_f msg = try on_ws_msg msg with exn -> maybe_error log "%s" Exn.(to_string exn) in
       Monitor.protect ~finally:cleanup
         (fun () -> Pipe.iter_without_pushback ws_r ~f:pipe_f)
     in
     let rec loop () = begin
-      try_with (fun () -> Tcp.(with_connection (to_host_and_port host port) tcp_fun)) >>| function
+      Monitor.try_with_or_error ~name:"BFX.Ws.with_connection"
+        (fun () -> Tcp.(with_connection (to_host_and_port host port) tcp_fun)) >>| function
       | Ok () -> maybe_error log "[WS] connection to %s terminated" uri_str
-      | Error exn -> maybe_error log "[WS] connection to %s raised %s" uri_str Exn.(backtrace ())
+      | Error err -> maybe_error log "[WS] connection to %s raised %s" uri_str (Error.to_string_hum err)
     end >>= fun () ->
       if stop_f () then Deferred.unit
       else begin

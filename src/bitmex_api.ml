@@ -295,14 +295,14 @@ module Ws = struct
         Deferred.all_unit [Reader.close r; Writer.close w]
       in
       maybe_info log "[WS] connecting to %s" uri_str;
-      let pipe_f msg = try on_ws_msg msg with exn -> maybe_error log "%s" Exn.(backtrace ()) in
+      let pipe_f msg = try on_ws_msg msg with exn -> maybe_error log "%s" (Exn.to_string exn) in
       Monitor.protect ~finally:cleanup (fun () -> Pipe.iter_without_pushback ws_r ~f:pipe_f)
     in
     let rec loop () =
       begin
-        try_with ~name:"with_connection" (fun () -> Tcp.(with_connection (to_host_and_port host port) tcp_fun)) >>| function
+        Monitor.try_with_or_error ~name:"with_connection" (fun () -> Tcp.(with_connection (to_host_and_port host port) tcp_fun)) >>| function
         | Ok () -> maybe_error log "[WS] connection to %s terminated" uri_str;
-        | Error exn -> maybe_error log "[WS] connection to %s raised %s" uri_str Exn.(backtrace ());
+        | Error err -> maybe_error log "[WS] connection to %s raised %s" uri_str (Error.to_string_hum err)
       end >>= fun () ->
       if stop_f () then Deferred.unit
       else begin
