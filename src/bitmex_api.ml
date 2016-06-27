@@ -139,10 +139,7 @@ module Rest = struct
       Body.to_string body >>= fun body_str ->
       let status = Response.status resp in
       let status_code = C.Code.code_of_status status in
-      if C.Code.is_success status_code then begin
-        maybe_debug log "<- %s" body_str;
-        return body_str
-      end
+      if C.Code.is_success status_code then return body_str
       else if C.Code.is_client_error status_code then begin
         match error_of_yojson Yojson.Safe.(from_string body_str) with
         | `Ok { error = { name; message }} ->
