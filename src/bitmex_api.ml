@@ -97,7 +97,9 @@ module Quote = struct
 end
 
 module Crypto = struct
-  let nonce = ref Time_ns.(now () |> to_int_ns_since_epoch |> fun t -> t / 1_000_000)
+  let gen_nonce () =
+    Time_ns.(now () |> to_int_ns_since_epoch) / 1_000_000_000 + 5 |>
+    Int.to_string
 
   let sign ?log ?(data="") ~secret ~verb ~endp () =
     let verb_str = match verb with
@@ -106,8 +108,7 @@ module Crypto = struct
       | `PUT -> "PUT"
       | `DELETE -> "DELETE"
     in
-    incr nonce;
-    let nonce = Int.to_string !nonce in
+    let nonce = gen_nonce () in
     maybe_debug log "sign %s" nonce;
     let prehash = verb_str ^ endp ^ nonce ^ data in
     match Hex.(of_cstruct Nocrypto.Hash.SHA256.(hmac ~key:secret Cstruct.(of_string prehash))) with `Hex sign -> nonce, sign
@@ -115,7 +116,7 @@ module Crypto = struct
   let mk_query_params ?log ?(data="") ~key ~secret verb uri =
     let endp = Uri.path_and_query uri in
     let nonce, signature = sign ?log ~secret ~verb ~endp ~data () in
-    [ "api-nonce", [nonce];
+    [ "api-expires", [nonce];
       "api-key", [key];
       "api-signature", [signature];
     ]
