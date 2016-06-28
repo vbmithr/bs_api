@@ -97,26 +97,28 @@ module Quote = struct
 end
 
 module Crypto = struct
-  let gen_nonce () =
-    Time_ns.(now () |> to_int_ns_since_epoch) / 1_000_000_000 + 5 |>
-    Int.to_string
+  let gen_nonce = function
+  | `Rest ->
+    Time_ns.(now () |> to_int_ns_since_epoch) / 1_000_000_000 + 5 |> Int.to_string
+  | `Ws ->
+    Time_ns.(now () |> to_int_ns_since_epoch) / 1_000_000 |> Int.to_string
 
-  let sign ?log ?(data="") ~secret ~verb ~endp () =
+  let sign ?log ?(data="") ~secret ~verb ~endp kind =
     let verb_str = match verb with
       | `GET -> "GET"
       | `POST -> "POST"
       | `PUT -> "PUT"
       | `DELETE -> "DELETE"
     in
-    let nonce = gen_nonce () in
+    let nonce = gen_nonce kind in
     maybe_debug log "sign %s" nonce;
     let prehash = verb_str ^ endp ^ nonce ^ data in
     match Hex.(of_cstruct Nocrypto.Hash.SHA256.(hmac ~key:secret Cstruct.(of_string prehash))) with `Hex sign -> nonce, sign
 
-  let mk_query_params ?log ?(data="") ~key ~secret verb uri =
+  let mk_query_params ?log ?(data="") ~key ~secret kind verb uri =
     let endp = Uri.path_and_query uri in
-    let nonce, signature = sign ?log ~secret ~verb ~endp ~data () in
-    [ "api-expires", [nonce];
+    let nonce, signature = sign ?log ~secret ~verb ~endp ~data kind in
+    [ (match kind with `Rest -> "api-expires" | `Ws -> "api-nonce"), [nonce];
       "api-key", [key];
       "api-signature", [signature];
     ]
@@ -159,7 +161,7 @@ module Rest = struct
     inner ()
 
   let mk_headers ?log ?(data="") ~key ~secret verb uri =
-    let query_params = Crypto.mk_query_params ?log ~data ~key ~secret verb uri in
+    let query_params = Crypto.mk_query_params ?log ~data ~key ~secret `Rest verb uri in
     Cohttp.Header.of_list @@
     ("content-type", "application/json") :: List.Assoc.map query_params ~f:List.hd_exn
 
@@ -261,7 +263,7 @@ module Ws = struct
     let uri = if testnet then testnet_uri else uri in
     let auth_params = match auth with
       | None -> []
-      | Some (key, secret) -> Crypto.mk_query_params ?log ~key ~secret `GET uri
+      | Some (key, secret) -> Crypto.mk_query_params ?log ~key ~secret `Ws `GET uri
     in
     let uri = Uri.add_query_params uri @@
       ["heartbeat", ["true"];
