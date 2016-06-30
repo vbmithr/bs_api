@@ -259,7 +259,7 @@ module Ws = struct
   let uri = Uri.with_path uri "realtime"
   let testnet_uri = Uri.with_path testnet_uri "realtime"
 
-  let with_connection ?(stop_f=Fn.const false) ?(query_params=[]) ?log ?auth ?to_ws ~testnet ~topics ~on_ws_msg () =
+  let with_connection ?(query_params=[]) ?log ?auth ~testnet ~topics () =
     let uri = if testnet then testnet_uri else uri in
     let auth_params = match auth with
       | None -> []
@@ -276,6 +276,7 @@ module Ws = struct
         Uri_services.(tcp_port_of_uri uri)
     in
     let scheme = Option.value_exn ~message:"no scheme in uri" Uri.(scheme uri) in
+    let client_r, client_w = Pipe.create () in
     let tcp_fun s r w =
       Socket.(setopt s Opt.nodelay true);
       begin
@@ -283,34 +284,28 @@ module Ws = struct
         else return (r, w)
       end >>= fun (r, w) ->
       let ws_r, ws_w = Websocket_async.client_ez ?log ~heartbeat:(sec 25.) uri s r w in
-      Option.iter to_ws ~f:(fun to_ws ->
-          don't_wait_for @@ Pipe.transfer to_ws ws_w ~f:(fun q ->
-              let q_str = (q |> query_to_yojson |> Yojson.Safe.to_string) in
-              maybe_debug log "-> %s" q_str;
-              q_str
-            )
-        );
       let cleanup () =
         Pipe.close_read ws_r;
         Deferred.all_unit [Reader.close r; Writer.close w]
       in
       maybe_info log "[WS] connecting to %s" uri_str;
-      let pipe_f msg = try on_ws_msg msg with exn -> maybe_error log "%s" (Exn.to_string exn) in
-      Monitor.protect ~finally:cleanup (fun () -> Pipe.iter_without_pushback ws_r ~f:pipe_f)
+      Monitor.protect ~finally:cleanup (fun () -> Pipe.transfer_id ws_r client_w)
     in
     let rec loop () =
       begin
-        Monitor.try_with_or_error ~name:"with_connection" (fun () -> Tcp.(with_connection (to_host_and_port host port) tcp_fun)) >>| function
+        Monitor.try_with_or_error ~name:"with_connection" (fun () ->
+            Tcp.(with_connection (to_host_and_port host port) tcp_fun)) >>| function
         | Ok () -> maybe_error log "[WS] connection to %s terminated" uri_str;
         | Error err -> maybe_error log "[WS] connection to %s raised %s" uri_str (Error.to_string_hum err)
       end >>= fun () ->
-      if stop_f () then Deferred.unit
+      if Pipe.is_closed client_r then Deferred.unit
       else begin
         maybe_error log "[WS] restarting connection to %s" uri_str;
-        after @@ sec 10. >>= loop
+        Clock_ns.after @@ Time_ns.Span.of_int_sec 10 >>= loop
       end
     in
-    loop ()
+    don't_wait_for @@ loop ();
+    client_r
 
   module Kaiko = struct
     type ticker = { last: string; bid: string; ask: string } [@@deriving yojson]
@@ -366,14 +361,15 @@ module Ws = struct
       in
       let rec loop () =
         begin
-          Monitor.try_with_or_error ~name:"with_connection" (fun () -> Tcp.(with_connection (to_host_and_port host port) tcp_fun)) >>| function
+          Monitor.try_with_or_error ~name:"with_connection" (fun () ->
+              Tcp.(with_connection (to_host_and_port host port) tcp_fun)) >>| function
           | Ok () -> maybe_error log "[WS] connection to %s terminated" uri_str;
           | Error err -> maybe_error log "[WS] connection to %s raised %s" uri_str (Error.to_string_hum err)
         end >>= fun () ->
         if Pipe.is_closed client_r then Deferred.unit
         else begin
           maybe_error log "[WS] restarting connection to %s" uri_str;
-          after @@ sec 10. >>= loop
+          Clock_ns.after @@ Time_ns.Span.of_int_sec 10 >>= loop
         end
       in
       don't_wait_for @@ loop ();
