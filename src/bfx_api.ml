@@ -589,7 +589,7 @@ module Ws = struct
     let `Hex authSig = Hash.SHA384.hmac ~key:secret Cstruct.(of_string payload) |> Hex.of_cstruct in
     create_auth ~event:"auth" ~apiKey ~authSig ~authPayload:payload ()
 
-  let with_connection ?(stop_f=Fn.const false) ?auth ?log ?(evts=[]) ?to_ws ~on_ws_msg () =
+  let with_connection ?auth ?log ?(evts=[]) ?to_ws () =
     let uri_str = "https://api2.bitfinex.com:3000/ws" in
     let uri = Uri.of_string uri_str in
     let uri_str = Uri.to_string uri in
@@ -598,19 +598,30 @@ module Ws = struct
         Uri_services.(tcp_port_of_uri uri)
     in
     let scheme = Option.value_exn ~message:"no scheme in uri" Uri.(scheme uri) in
+    let cur_ws_w = ref None in
+    Option.iter to_ws ~f:(fun to_ws ->
+        don't_wait_for @@
+        Monitor.handle_errors
+          (fun () ->
+             Pipe.iter ~continue_on_error:true to_ws
+               ~f:(fun ev ->
+                   let ev_str = (ev |> Ev.to_yojson |> Yojson.Safe.to_string) in
+                   maybe_debug log "-> %s" ev_str;
+                   match !cur_ws_w with
+                   | None -> Deferred.unit
+                   | Some w -> Pipe.write_if_open w ev_str
+                 )
+          )
+          (fun exn -> maybe_error log "%s" @@ Exn.to_string exn)
+      );
+    let client_r, client_w = Pipe.create () in
     let tcp_fun s r w =
       Socket.(setopt s Opt.nodelay true);
       begin if scheme = "https" || scheme = "wss" then Conduit_async_ssl.ssl_connect r w
       else return (r, w)
       end >>= fun (r, w) ->
       let ws_r, ws_w = Websocket_async.client_ez uri s r w in
-      Option.iter to_ws ~f:(fun to_ws ->
-          don't_wait_for @@ Pipe.transfer to_ws ws_w ~f:(fun ev ->
-              let ev_str = (ev |> Ev.to_yojson |> Yojson.Safe.to_string) in
-              maybe_debug log "-> %s" ev_str;
-              ev_str
-            )
-        );
+      cur_ws_w := Some ws_w;
       let cleanup () =
         Pipe.close_read ws_r;
         Deferred.all_unit [Reader.close r; Writer.close w]
@@ -631,9 +642,7 @@ module Ws = struct
           maybe_debug log "-> %s" ev_str;
           Pipe.write ws_w ev_str
         ) >>= fun () ->
-      let pipe_f msg = try on_ws_msg msg with exn -> maybe_error log "%s" Exn.(to_string exn) in
-      Monitor.protect ~finally:cleanup
-        (fun () -> Pipe.iter_without_pushback ws_r ~f:pipe_f)
+      Monitor.protect ~finally:cleanup (fun () -> Pipe.transfer_id ws_r client_w)
     in
     let rec loop () = begin
       Monitor.try_with_or_error ~name:"BFX.Ws.with_connection"
@@ -641,11 +650,12 @@ module Ws = struct
       | Ok () -> maybe_error log "[WS] connection to %s terminated" uri_str
       | Error err -> maybe_error log "[WS] connection to %s raised %s" uri_str (Error.to_string_hum err)
     end >>= fun () ->
-      if stop_f () then Deferred.unit
+      if Pipe.is_closed client_r then Deferred.unit
       else begin
         maybe_error log "[WS] restarting connection to %s" uri_str;
         after @@ sec 10. >>= loop
       end
     in
-    loop ()
+    don't_wait_for @@ loop ();
+    client_r
 end
