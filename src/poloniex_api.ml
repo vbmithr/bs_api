@@ -65,11 +65,11 @@ module Ws = struct
       let low24h = Float.of_string low24h in
       create_ticker ~symbol ~last ~ask ~bid ~pct_change ~base_volume ~quote_volume ~is_frozen
         ~high24h ~low24h ()
-    | #Yojson.Safe.json as json ->
-      invalid_arg Printf.(sprintf "ticker_of_json: %s" Yojson.Safe.(to_string json))
+    | #Yojson.Safe.json as json -> invalid_argf "ticker_of_json: %s" Yojson.Safe.(to_string json) ()
 
-  let open_connection ?log ~topics ~on_ws_msg () =
-    let uri = Uri.of_string "https://api.poloniex.com" in
+  let open_connection ?log ~topics () =
+    let uri_str = "https://api.poloniex.com" in
+    let uri = Uri.of_string uri_str in
     let host = Option.value_exn ~message:"no host in uri" Uri.(host uri) in
     let port = Option.value_exn ~message:"no port inferred from scheme"
         Uri_services.(tcp_port_of_uri uri) in
@@ -91,15 +91,15 @@ module Ws = struct
           Wamp.subscribed_of_msg ~request_id msg
         )
     in
-    let process_ws r w () =
+    let client_r, client_w = Pipe.create () in
+    let process_ws r w =
       (* Initialize *)
       write_wamp w Wamp.(hello ~realm:"realm1" ()) >>= fun () ->
       read_wamp r >>= fun msg -> match msg.Wamp.typ with
       | Welcome ->
         subscribe ~topics r w >>= fun _sub_ids ->
-        Pipe.iter_without_pushback r ~f:on_ws_msg
-      | msgtype ->
-        failwith Printf.(sprintf "wamp: expected Welcome, got %s" Wamp.(show_msgtype msgtype))
+        Pipe.transfer_id r client_w
+      | msgtype -> failwithf "wamp: expected Welcome, got %s" Wamp.(show_msgtype msgtype) ()
     in
     let tcp_fun s r w =
       Socket.(setopt s Opt.nodelay true);
@@ -112,20 +112,23 @@ module Ws = struct
         Websocket_async.client_ez ~extra_headers ~heartbeat:(sec 25.) uri s r w
       in
       let cleanup () = Deferred.all_unit [Reader.close r; Writer.close w] in
-      maybe_info log "(Re-)starting ws feed @ %s" Uri.(to_string uri);
-      Monitor.protect ~finally:cleanup (process_ws ws_r ws_w)
+      maybe_info log "[WS] connecting to %s" uri_str;
+      Monitor.protect ~finally:cleanup (fun () -> process_ws ws_r ws_w)
     in
-    let rec loop () =
-      try_with
-        (fun () -> Tcp.(with_connection (to_host_and_port host port) tcp_fun)
-        ) >>= function
-      | Ok () ->
-        maybe_error log "Poloniex websocket connection terminated, restarting";
-        after @@ sec 10. >>= loop
-      | Error exn ->
-        maybe_error log "%s" Exn.(backtrace ());
-        after @@ sec 10. >>= loop
-    in loop ()
+    let rec loop () = begin
+      Monitor.try_with_or_error ~name:"PNLX.Ws.open_connection"
+        (fun () -> Tcp.(with_connection (to_host_and_port host port) tcp_fun)) >>| function
+      | Ok () -> maybe_error log "[WS] connection to %s terminated" uri_str
+      | Error err -> maybe_error log "[WS] connection to %s raised %s" uri_str (Error.to_string_hum err)
+    end >>= fun () ->
+      if Pipe.is_closed client_r then Deferred.unit
+      else begin
+        maybe_error log "[WS] restarting connection to %s" uri_str;
+        Clock_ns.after @@ Time_ns.Span.of_int_sec 10 >>= loop
+      end
+    in
+    don't_wait_for @@ loop ();
+    client_r
 end
 
 type trade = {
