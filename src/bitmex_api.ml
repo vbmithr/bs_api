@@ -259,7 +259,7 @@ module Ws = struct
   let uri = Uri.with_path uri "realtime"
   let testnet_uri = Uri.with_path testnet_uri "realtime"
 
-  let with_connection ?(query_params=[]) ?log ?auth ~testnet ~topics () =
+  let open_connection ?(query_params=[]) ?log ?auth ~testnet ~topics () =
     let uri = if testnet then testnet_uri else uri in
     let auth_params = match auth with
       | None -> []

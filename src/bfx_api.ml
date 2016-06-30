@@ -589,7 +589,7 @@ module Ws = struct
     let `Hex authSig = Hash.SHA384.hmac ~key:secret Cstruct.(of_string payload) |> Hex.of_cstruct in
     create_auth ~event:"auth" ~apiKey ~authSig ~authPayload:payload ()
 
-  let with_connection ?auth ?log ?(evts=[]) ?to_ws () =
+  let open_connection ?auth ?log ?(evts=[]) ?to_ws () =
     let uri_str = "https://api2.bitfinex.com:3000/ws" in
     let uri = Uri.of_string uri_str in
     let uri_str = Uri.to_string uri in
@@ -653,7 +653,7 @@ module Ws = struct
       if Pipe.is_closed client_r then Deferred.unit
       else begin
         maybe_error log "[WS] restarting connection to %s" uri_str;
-        after @@ sec 10. >>= loop
+        Clock_ns.after @@ Time_ns.Span.of_int_sec 10 >>= loop
       end
     in
     don't_wait_for @@ loop ();
