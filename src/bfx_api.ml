@@ -1,6 +1,7 @@
 open Core.Std
 open Async.Std
 
+open Dtc
 open Bs_devkit.Core
 
 let exchange = "BITFINEX"

@@ -18,14 +18,14 @@ module Instrument = struct
       ^ (if testnet && not index then "T" else "")
     in
     let tickSize = float_exn t "tickSize" in
-    let open SecurityDefinition in
+    let open Dtc.SecurityDefinition in
     Response.create
       ~symbol
       ~exchange
       ~security_type:(if index then `Index else `Future)
       ~descr:""
       ~min_price_increment:tickSize
-      ~price_display_format:(price_display_format_of_ticksize tickSize)
+      ~price_display_format:(Dtc.price_display_format_of_ticksize tickSize)
       ~currency_value_per_increment:tickSize
       ~underlying_symbol:(string_exn t "underlyingSymbol")
       ~updates_bid_ask_only:false
@@ -399,7 +399,7 @@ let string_of_ord_type = function
   | `Stop -> "Stop"
   | `Stop_limit -> "StopLimit"
   | `Market_if_touched -> "MarketIfTouched"
-  | #order_type -> invalid_arg "string_of_ord_type"
+  | #Dtc.order_type -> invalid_arg "string_of_ord_type"
 
 let ord_type_of_string = function
   | "Market" -> `Market
@@ -414,7 +414,7 @@ let string_of_tif = function
   | `Good_till_canceled | `All_or_none -> "GoodTillCancel"
   | `Immediate_or_cancel -> "ImmediateOrCancel"
   | `Fill_or_kill -> "FillOrKill"
-  | #time_in_force -> invalid_arg "string_of_tif"
+  | #Dtc.time_in_force -> invalid_arg "string_of_tif"
 
 let tif_of_string = function
   | "Day" -> `Day
