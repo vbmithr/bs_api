@@ -9,5 +9,6 @@ let () =
     Pkg.lib ~exts:Exts.library "src/bitmex_api";
     Pkg.lib ~exts:Exts.library "src/bfx_api";
     Pkg.lib ~exts:Exts.library "src/poloniex_api";
+    Pkg.bin ~auto:true "src/test_ws";
     Pkg.mllib "src/bs_api.mllib"
   ]
