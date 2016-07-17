@@ -60,15 +60,11 @@ module Rest = struct
       expiration: string;
     } [@@deriving yojson]
 
-    let of_yojson_exn json = match of_yojson json with
-      | `Ok v -> v
-      | `Error msg -> invalid_arg msg
-
     let get () =
       let uri = Uri.with_path base_uri "/v1/symbols_details" in
       Client.get uri >>= handle_rest_call >>| function
       | Error exn -> raise exn
-      | Ok (`List syms) -> List.map syms ~f:of_yojson_exn
+      | Ok (`List syms) -> List.map syms ~f:(Fn.compose Result.ok_or_failwith of_yojson)
       | Ok #Yojson.Safe.json -> invalid_arg "get_syms"
   end
 
@@ -112,8 +108,8 @@ module Rest = struct
       | Ok (`List ts) ->
         let filter_map_f t =
           try begin match Raw.of_yojson t with
-            | `Ok raw -> Some (of_raw raw)
-            | `Error msg ->
+            | Ok raw -> Some (of_raw raw)
+            | Error msg ->
               maybe_debug log "%s" msg;
               invalid_arg msg
           end
@@ -271,9 +267,8 @@ module Rest = struct
             ()
         let of_yojson json =
           Raw.of_yojson json |> function
-          | `Error msg ->
-            invalid_arg "Rest.Priv.Order.Response.of_yojson"
-          | `Ok r -> of_raw r
+          | Error msg -> invalid_arg "Rest.Priv.Order.Response.of_yojson"
+          | Ok r -> of_raw r
       end
     end
   end

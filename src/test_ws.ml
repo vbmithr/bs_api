@@ -66,7 +66,7 @@ let command =
   let run cfg testnet loglevel topics =
     let exchange = "BMEX" ^ (if testnet then "T" else "") in
     let cfg_json = Yojson.Safe.from_file cfg in
-    let cfg = Cfg.of_yojson cfg_json |> presult_exn in
+    let cfg = Result.ok_or_failwith @@ Cfg.of_yojson cfg_json in
     let { Cfg.key; secret } = List.Assoc.find_exn cfg exchange in
     let secret = Cstruct.of_string secret in
     Option.iter loglevel ~f:set_loglevel;

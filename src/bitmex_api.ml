@@ -145,10 +145,8 @@ module Rest = struct
       if C.Code.is_success status_code then return body_str
       else if C.Code.is_client_error status_code then begin
         match error_of_yojson Yojson.Safe.(from_string body_str) with
-        | `Ok { error = { name; message }} ->
-          failwithf "%s: %s" name message ()
-        | `Error _ ->
-          failwithf "%s: json error" name ()
+        | Ok { error = { name; message }} -> failwithf "%s: %s" name message ()
+        | Error _ -> failwithf "%s: json error" name ()
       end
       else if C.Code.is_server_error status_code then begin
         maybe_error log "%s: %s" name (C.Code.sexp_of_status_code status |> Sexplib.Sexp.to_string_hum);
@@ -351,10 +349,10 @@ module Ws = struct
                   ~f:(fun msg_str ->
                       Yojson.Safe.from_string ~buf msg_str |>
                       msg_of_yojson |> function
-                      | `Error msg ->
+                      | Ok msg -> Some msg.data
+                      | Error msg ->
                         maybe_error log "%s: %s" msg msg_str;
                         None
-                      | `Ok msg -> Some msg.data
                     )
               )
           )
