@@ -58,19 +58,6 @@ module OrderBook = struct
       price: float option [@default None];
     } [@@deriving yojson]
   end
-
-  module T = struct
-    type t = {
-      price: Float.t [@default 0.];
-      size: Int.t [@default 0];
-      ts: Time_ns.t [@default Time_ns.epoch];
-    } [@@deriving sexp,create]
-    let compare a b = match Float.compare a.price b.price with
-      | 0 -> Int.compare a.size b.size
-      | n -> n
-  end
-  include T
-  module Set = Set.Make(T)
 end
 
 module Quote = struct
