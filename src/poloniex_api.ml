@@ -20,7 +20,7 @@ type trade = {
   side: BuyOrSell.t;
   price: int; (* in satoshis *)
   qty: int; (* in satoshis *)
-} [@@deriving create]
+} [@@deriving create, sexp, bin_io]
 
 let trade_of_trade_raw { date; typ; rate; amount; total } =
   let date = Time_ns.of_string date in
