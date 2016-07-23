@@ -6,8 +6,8 @@ open Bs_devkit.Core
 let endpoint = Uri.of_string "https://poloniex.com/public"
 
 type trade_raw = {
-  globalTradeID: (int [@default 0]);
-  tradeID: (int [@default 0]);
+  globalTradeID: (Yojson.Safe.json [@default `Null]);
+  tradeID: (Yojson.Safe.json [@default `Null]);
   date: string;
   typ: string [@key "type"];
   rate: string;
@@ -30,26 +30,18 @@ let trade_of_trade_raw { date; typ; rate; amount; total } =
   create_trade date typ rate amount ()
 
 module Ws = struct
-  type trade_raw = {
-    globalTradeID: (string [@default "0"]);
-    tradeID: (string [@default "0"]);
-    date: string;
-    typ: string [@key "type"];
-    rate: string;
-    amount: string;
-    total: string;
-  } [@@deriving yojson]
-
-  let to_trade_raw { globalTradeID; tradeID; date; typ; rate; amount; total } =
-    let globalTradeID = int_of_string globalTradeID in
-    let tradeID = int_of_string tradeID in
-    create_trade_raw ~globalTradeID ~tradeID ~date ~typ ~rate ~amount ~total ()
-
-  type book = {
+  type book_raw = {
     rate: string;
     typ: string [@key "type"];
-    amount: string;
+    amount: (string option [@default None]);
   } [@@deriving yojson]
+
+let to_book action { rate; typ; amount } =
+  let side = match typ with "bid" -> Side.Bid | "ask" -> Ask | _ -> invalid_arg "book_of_book_raw" in
+  let price = Fn.compose satoshis_int_of_float_exn Float.of_string rate in
+  let size = Option.map amount ~f:(Fn.compose satoshis_int_of_float_exn Float.of_string) in
+  let update = OB.create_update ~id:0 ~side ~price ?size () in
+  OB.create action update ()
 
   type t = {
     typ: string [@key "type"];
@@ -87,7 +79,7 @@ module Ws = struct
         ~high24h ~low24h ()
     | #Yojson.Safe.json as json -> invalid_argf "ticker_of_json: %s" Yojson.Safe.(to_string json) ()
 
-  let open_connection ?log ~topics () =
+  let open_connection ?(buf=Bi_outbuf.create 1024) ?log ~topics () =
     let uri_str = "https://api.poloniex.com" in
     let uri = Uri.of_string uri_str in
     let host = Option.value_exn ~message:"no host in uri" Uri.(host uri) in
@@ -96,7 +88,6 @@ module Ws = struct
     let scheme =
       Option.value_exn ~message:"no scheme in uri" Uri.(scheme uri) in
     let write_wamp w msg = msg |> Wamp.json_of_msg |> Yojson.Safe.to_string |> Pipe.write w in
-    let buf = Bi_outbuf.create 1024 in
     let read_wamp msg = Yojson.Safe.from_string ~buf msg |> Wamp.msg_of_json in
     let subscribe ~topics r w =
       Deferred.List.map ~how:`Sequential topics ~f:(fun topic ->
