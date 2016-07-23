@@ -15,6 +15,20 @@ type trade_raw = {
   total: string;
 } [@@deriving create,yojson]
 
+type trade = {
+  ts: Time_ns.t;
+  side: BuyOrSell.t;
+  price: int; (* in satoshis *)
+  qty: int; (* in satoshis *)
+} [@@deriving create]
+
+let trade_of_trade_raw { date; typ; rate; amount; total } =
+  let date = Time_ns.of_string date in
+  let typ = match typ with "buy" -> BuyOrSell.Buy | "sell" -> Sell | _ -> invalid_arg "typ_of_string" in
+  let rate = Fn.compose satoshis_int_of_float_exn Float.of_string rate in
+  let amount = Fn.compose satoshis_int_of_float_exn Float.of_string amount in
+  create_trade date typ rate amount ()
+
 module Ws = struct
   type trade_raw = {
     globalTradeID: (string [@default "0"]);
@@ -30,6 +44,12 @@ module Ws = struct
     let globalTradeID = int_of_string globalTradeID in
     let tradeID = int_of_string tradeID in
     create_trade_raw ~globalTradeID ~tradeID ~date ~typ ~rate ~amount ~total ()
+
+  type book = {
+    rate: string;
+    typ: string [@key "type"];
+    amount: string;
+  } [@@deriving yojson]
 
   type t = {
     typ: string [@key "type"];
@@ -131,18 +151,3 @@ module Ws = struct
     don't_wait_for @@ loop ();
     client_r
 end
-
-type trade = {
-  ts: Time_ns.t;
-  side: [`Buy | `Sell];
-  price: float;
-  qty: float;
-} [@@deriving create]
-
-let trade_of_trade_raw { date; typ; rate; amount; total } =
-  let date = Time_ns.of_string date in
-  let typ = match typ with "buy" -> `Buy | "sell" -> `Sell | _ -> invalid_arg "typ_of_string" in
-  let rate = Float.of_string rate in
-  let amount = Float.of_string amount in
-  create_trade date typ rate amount ()
-
