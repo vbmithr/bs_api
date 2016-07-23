@@ -443,10 +443,8 @@ let execInst_of_dtc ord_type tif stop_exec_inst =
   | `All_or_none -> ["execInst", `String (String.concat ~sep:"," ("AllOrNone" :: execInst)); "displayQty", `Float 0.]
   | #Dtc.time_in_force -> List.map execInst ~f:(fun ei -> "execInst", `String ei)
 
-type update_action = Partial | Insert | Update | Delete [@@deriving sexp,bin_io]
-
 let update_action_of_string = function
-  | "partial" -> Partial
+  | "partial" -> OB.Partial
   | "insert" -> Insert
   | "update"  -> Update
   | "delete" -> Delete
