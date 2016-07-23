@@ -177,7 +177,8 @@ let to_book action { rate; typ; amount } =
       if Pipe.is_closed client_r then Deferred.unit
       else begin
         maybe_error log "[WS] restarting connection to %s" uri_str;
-        Clock_ns.after @@ Time_ns.Span.of_int_sec 10 >>= loop
+        Clock_ns.after @@ Time_ns.Span.of_int_sec 10 >>=
+        loop
       end
     in
     don't_wait_for @@ loop ();
