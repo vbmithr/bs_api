@@ -29,6 +29,47 @@ let trade_of_trade_raw { date; typ; rate; amount; total } =
   let amount = Fn.compose satoshis_int_of_float_exn Float.of_string amount in
   create_trade date typ rate amount ()
 
+module Rest = struct
+  open Cohttp_async
+  let base_uri = Uri.of_string "https://poloniex.com/public"
+
+  let bids_asks_of_yojson = function
+  | `List records -> begin
+    List.map records ~f:(function
+      | `List [`String price; `Int qty] -> Float.of_string price, Float.of_int qty
+      | `List [`String price; `Float qty] -> Float.of_string price, qty
+      | #Yojson.Safe.json -> invalid_arg "books_of_yojson (record)")
+    end
+  | #Yojson.Safe.json -> invalid_arg "books_of_yojson"
+
+  type book_raw = {
+    asks: Yojson.Safe.json;
+    bids: Yojson.Safe.json;
+    isFrozen: string;
+    seq: int;
+  } [@@deriving yojson]
+
+  type book = {
+    asks: (float * float) list;
+    bids: (float * float) list;
+    isFrozen: bool;
+    seq: int;
+  } [@@deriving create]
+
+  let orderbook symbol depth =
+    let url = Uri.with_query' base_uri
+        ["command", "returnOrderBook"; "currencyPair", symbol; "depth", Int.to_string depth]
+    in
+    Client.get url >>= fun (resp, body) ->
+    Body.to_string body >>| fun body_str ->
+    Yojson.Safe.from_string body_str |> book_raw_of_yojson |> Result.ok_or_failwith |> fun { asks; bids; isFrozen; seq } ->
+    create_book
+      ~asks:(bids_asks_of_yojson asks)
+      ~bids:(bids_asks_of_yojson bids)
+      ~isFrozen:(not (isFrozen = "0"))
+      ~seq ()
+end
+
 module Ws = struct
   type book_raw = {
     rate: string;
