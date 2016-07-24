@@ -29,45 +29,72 @@ let trade_of_trade_raw { date; typ; rate; amount; total } =
   let amount = Fn.compose satoshis_int_of_float_exn Float.of_string amount in
   create_trade date typ rate amount ()
 
+type book_entry = {
+  side: Side.t;
+  price: int;
+  qty: int;
+} [@@deriving create, sexp, bin_io]
+
 module Rest = struct
   open Cohttp_async
   let base_uri = Uri.of_string "https://poloniex.com/public"
 
-  let bids_asks_of_yojson = function
-  | `List records -> begin
+  let bids_asks_of_yojson side records =
     List.map records ~f:(function
-      | `List [`String price; `Int qty] -> Float.of_string price, Float.of_int qty
-      | `List [`String price; `Float qty] -> Float.of_string price, qty
+      | `List [`String price; `Int qty] -> create_book_entry side (Fn.compose satoshis_int_of_float_exn Float.of_string price) (Fn.compose satoshis_int_of_float_exn Float.of_int qty) ()
+      | `List [`String price; `Float qty] -> create_book_entry side (Fn.compose satoshis_int_of_float_exn Float.of_string price) (satoshis_int_of_float_exn qty) ()
       | #Yojson.Safe.json -> invalid_arg "books_of_yojson (record)")
-    end
-  | #Yojson.Safe.json -> invalid_arg "books_of_yojson"
 
   type book_raw = {
-    asks: Yojson.Safe.json;
-    bids: Yojson.Safe.json;
+    asks: Yojson.Safe.json list;
+    bids: Yojson.Safe.json list;
     isFrozen: string;
     seq: int;
   } [@@deriving yojson]
 
-  type book = {
-    asks: (float * float) list;
-    bids: (float * float) list;
+  type books = {
+    asks: book_entry list;
+    bids: book_entry list;
     isFrozen: bool;
     seq: int;
   } [@@deriving create]
 
-  let orderbook ~symbol ~depth =
+  let orderbook ?log ?(depth=100) symbol =
     let url = Uri.with_query' base_uri
         ["command", "returnOrderBook"; "currencyPair", symbol; "depth", Int.to_string depth]
     in
     Client.get url >>= fun (resp, body) ->
     Body.to_string body >>| fun body_str ->
-    Yojson.Safe.from_string body_str |> book_raw_of_yojson |> Result.ok_or_failwith |> fun { asks; bids; isFrozen; seq } ->
-    create_book
-      ~asks:(bids_asks_of_yojson asks)
-      ~bids:(bids_asks_of_yojson bids)
+    maybe_debug log "%s" body_str;
+    match Yojson.Safe.from_string body_str with
+    | `Assoc ["error", `String msg] -> failwith msg
+    | #Yojson.Safe.json as json ->
+      book_raw_of_yojson json |> Result.ok_or_failwith |> fun { asks; bids; isFrozen; seq } ->
+    create_books
+      ~asks:(bids_asks_of_yojson Ask asks)
+      ~bids:(bids_asks_of_yojson Bid bids)
       ~isFrozen:(not (isFrozen = "0"))
       ~seq ()
+
+  let trades ?buf ~start ~stop symbol =
+    let open Cohttp_async in
+    let start = Time_ns.to_int_ns_since_epoch start / 1_000_000_000 |> Int.to_string in
+    let stop = Time_ns.to_int_ns_since_epoch stop / 1_000_000_000 |> Int.to_string in
+    let url = Uri.add_query_params' endpoint
+        ["command", "returnTradeHistory";
+         "currencyPair", symbol;
+         "start", start;
+         "end", stop;
+        ]
+    in
+    Client.get url >>= fun (resp, body) ->
+    Body.to_string body >>| fun body_str ->
+    match Yojson.Safe.from_string ?buf body_str with
+    | `List trades ->
+      List.map trades ~f:begin fun json ->
+        trade_raw_of_yojson json |> Result.ok_or_failwith |> trade_of_trade_raw
+      end
+    | #Yojson.Safe.json -> invalid_arg body_str
 end
 
 module Ws = struct
@@ -77,12 +104,11 @@ module Ws = struct
     amount: (string option [@default None]);
   } [@@deriving yojson]
 
-let to_book id action { rate; typ; amount } =
+let book_of_book_raw { rate; typ; amount } =
   let side = match typ with "bid" -> Side.Bid | "ask" -> Ask | _ -> invalid_arg "book_of_book_raw" in
   let price = Fn.compose satoshis_int_of_float_exn Float.of_string rate in
-  let size = Option.map amount ~f:(Fn.compose satoshis_int_of_float_exn Float.of_string) in
-  let update = OB.create_update ~id ~side ~price ?size () in
-  OB.create action update ()
+  let qty = Option.value_map amount ~default:0 ~f:(Fn.compose satoshis_int_of_float_exn Float.of_string) in
+  create_book_entry side price qty ()
 
   type t = {
     typ: string [@key "type"];
