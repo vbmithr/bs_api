@@ -56,7 +56,7 @@ module Rest = struct
     seq: int;
   } [@@deriving create]
 
-  let orderbook symbol depth =
+  let orderbook ~symbol ~depth =
     let url = Uri.with_query' base_uri
         ["command", "returnOrderBook"; "currencyPair", symbol; "depth", Int.to_string depth]
     in
@@ -77,11 +77,11 @@ module Ws = struct
     amount: (string option [@default None]);
   } [@@deriving yojson]
 
-let to_book action { rate; typ; amount } =
+let to_book id action { rate; typ; amount } =
   let side = match typ with "bid" -> Side.Bid | "ask" -> Ask | _ -> invalid_arg "book_of_book_raw" in
   let price = Fn.compose satoshis_int_of_float_exn Float.of_string rate in
   let size = Option.map amount ~f:(Fn.compose satoshis_int_of_float_exn Float.of_string) in
-  let update = OB.create_update ~id:0 ~side ~price ?size () in
+  let update = OB.create_update ~id ~side ~price ?size () in
   OB.create action update ()
 
   type t = {
@@ -128,30 +128,37 @@ let to_book action { rate; typ; amount } =
         Uri_services.(tcp_port_of_uri uri) in
     let scheme =
       Option.value_exn ~message:"no scheme in uri" Uri.(scheme uri) in
-    let write_wamp w msg = msg |> Wamp.json_of_msg |> Yojson.Safe.to_string |> Pipe.write w in
-    let read_wamp msg = Yojson.Safe.from_string ~buf msg |> Wamp.msg_of_json in
-    let subscribe ~topics r w =
-      Deferred.List.map ~how:`Sequential topics ~f:(fun topic ->
-          let request_id, subscribe_msg = Wamp.(subscribe ~topic ()) in
-          write_wamp w subscribe_msg >>= fun () ->
-          Pipe.read r >>| function
-          | `Eof -> raise End_of_file
-          | `Ok msg -> Wamp.subscribed_of_msg ~request_id @@ read_wamp msg
+    let write_wamp w msg = msg |> Wamp.msg_to_yojson |> Yojson.Safe.to_string |> Pipe.write w in
+    let read_wamp_exn json_str =
+      Yojson.Safe.from_string ~buf json_str |>
+      Wamp.msg_of_yojson |>
+      Result.ok_or_failwith
+    in
+    let transfer_f q =
+      return @@ Queue.filter_map q ~f:(fun msg_str ->
+          maybe_debug log "%s" msg_str;
+          match Fn.compose Wamp.msg_of_yojson (Yojson.Safe.from_string ~buf) msg_str with
+          | Ok msg -> Some msg
+          | Error msg -> maybe_error log "%s" msg; None
         )
+    in
+    let subscribe ~topics r w =
+      Deferred.List.map ~how:`Sequential topics ~f:begin fun topic ->
+          let request_id, subscribe_msg = Wamp.subscribe topic in
+          write_wamp w subscribe_msg
+      end
     in
     let client_r, client_w = Pipe.create () in
     let process_ws r w =
       (* Initialize *)
-      write_wamp w Wamp.(hello ~realm:"realm1" ()) >>= fun () ->
+      write_wamp w Wamp.(hello (Uri.of_string "realm1") [Subscriber]) >>= fun () ->
       Pipe.read r >>= function
       | `Eof -> raise End_of_file
-      | `Ok msg -> begin
-          let msg = read_wamp msg in
-          match msg.Wamp.typ with
-          | Welcome ->
-            subscribe ~topics r w >>= fun _sub_ids ->
-            Pipe.transfer r client_w read_wamp
-          | msgtype -> failwithf "wamp: expected Welcome, got %s" Wamp.(show_msgtype msgtype) ()
+      | `Ok msg -> begin match read_wamp_exn msg with
+        | Wamp.Welcome _ ->
+          subscribe ~topics r w >>= fun _sub_ids ->
+          Pipe.transfer' r client_w transfer_f
+        | _ -> failwith "wamp: expected Welcome"
         end
     in
     let tcp_fun s r w =
@@ -166,7 +173,7 @@ let to_book action { rate; typ; amount } =
       in
       let cleanup () = Deferred.all_unit [Reader.close r; Writer.close w] in
       maybe_info log "[WS] connecting to %s" uri_str;
-      Monitor.protect ~finally:cleanup (fun () -> process_ws ws_r ws_w)
+      Monitor.protect ~name:"process_ws" ~finally:cleanup (fun () -> process_ws ws_r ws_w)
     in
     let rec loop () = begin
       Monitor.try_with_or_error ~name:"PNLX.Ws.open_connection"
