@@ -180,7 +180,9 @@ let book_of_book_raw { rate; typ; amount } =
       write_wamp w Wamp.(hello (Uri.of_string "realm1") [Subscriber]) >>= fun () ->
       Pipe.read r >>= function
       | `Eof -> raise End_of_file
-      | `Ok msg -> begin match read_wamp_exn msg with
+      | `Ok msg ->
+        maybe_debug log "%s" msg;
+        begin match read_wamp_exn msg with
         | Wamp.Welcome _ ->
           subscribe ~topics r w >>= fun _sub_ids ->
           Pipe.transfer' r client_w transfer_f
