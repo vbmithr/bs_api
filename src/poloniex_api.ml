@@ -37,7 +37,6 @@ type book_entry = {
 
 module Rest = struct
   open Cohttp_async
-  let base_uri = Uri.of_string "https://poloniex.com/public"
 
   let bids_asks_of_yojson side records =
     List.map records ~f:(function
@@ -60,7 +59,7 @@ module Rest = struct
   } [@@deriving create]
 
   let orderbook ?log ?(depth=100) symbol =
-    let url = Uri.with_query' base_uri
+    let url = Uri.with_query' endpoint
         ["command", "returnOrderBook"; "currencyPair", symbol; "depth", Int.to_string depth]
     in
     Client.get url >>= fun (resp, body) ->
