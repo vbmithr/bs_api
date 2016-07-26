@@ -145,7 +145,7 @@ let book_of_book_raw { rate; typ; amount } =
         ~high24h ~low24h ()
     | #Yojson.Safe.json as json -> invalid_argf "ticker_of_json: %s" Yojson.Safe.(to_string json) ()
 
-  let open_connection ?(buf=Bi_outbuf.create 1024) ?log ~topics () =
+  let open_connection ?(buf=Bi_outbuf.create 4096) ?log ~topics () =
     let uri_str = "https://api.poloniex.com" in
     let uri = Uri.of_string uri_str in
     let host = Option.value_exn ~message:"no host in uri" Uri.(host uri) in
@@ -153,15 +153,20 @@ let book_of_book_raw { rate; typ; amount } =
         Uri_services.(tcp_port_of_uri uri) in
     let scheme =
       Option.value_exn ~message:"no scheme in uri" Uri.(scheme uri) in
-    let write_wamp w msg = msg |> Wamp.msg_to_yojson |> Yojson.Safe.to_string |> Pipe.write w in
+    let write_wamp w msg =
+      let msg_str = Wamp.msg_to_yojson msg |> Yojson.Safe.to_string ~buf in
+      maybe_debug log "-> %s" msg_str;
+      Pipe.write w msg_str
+    in
     let read_wamp_exn json_str =
+      maybe_debug log "<- %s" json_str;
       Yojson.Safe.from_string ~buf json_str |>
       Wamp.msg_of_yojson |>
       Result.ok_or_failwith
     in
     let transfer_f q =
       return @@ Queue.filter_map q ~f:(fun msg_str ->
-          maybe_debug log "%s" msg_str;
+          maybe_debug log "<- %s" msg_str;
           match Fn.compose Wamp.msg_of_yojson (Yojson.Safe.from_string ~buf) msg_str with
           | Ok msg -> Some msg
           | Error msg -> maybe_error log "%s" msg; None
@@ -180,7 +185,6 @@ let book_of_book_raw { rate; typ; amount } =
       Pipe.read r >>= function
       | `Eof -> raise End_of_file
       | `Ok msg ->
-        maybe_debug log "%s" msg;
         begin match read_wamp_exn msg with
         | Wamp.Welcome _ ->
           subscribe ~topics r w >>= fun _sub_ids ->
