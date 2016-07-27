@@ -1,6 +1,6 @@
 all:
 	./build lib-byte
-	./build test_ws.byte
+	./build ws.byte
 
 clean:
 	./build clean
