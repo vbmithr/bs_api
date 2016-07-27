@@ -15,33 +15,20 @@ type trade_raw = {
   total: string;
 } [@@deriving create,yojson]
 
-type trade = {
-  ts: Time_ns.t;
-  side: BuyOrSell.t;
-  price: int; (* in satoshis *)
-  qty: int; (* in satoshis *)
-} [@@deriving create, sexp, bin_io]
-
 let trade_of_trade_raw { date; typ; rate; amount; total } =
   let date = Time_ns.of_string date in
   let typ = match typ with "buy" -> BuyOrSell.Buy | "sell" -> Sell | _ -> invalid_arg "typ_of_string" in
   let rate = Fn.compose satoshis_int_of_float_exn Float.of_string rate in
   let amount = Fn.compose satoshis_int_of_float_exn Float.of_string amount in
-  create_trade date typ rate amount ()
-
-type book_entry = {
-  side: Side.t;
-  price: int;
-  qty: int;
-} [@@deriving create, sexp, bin_io]
+  DB.create_trade date typ rate amount ()
 
 module Rest = struct
   open Cohttp_async
 
   let bids_asks_of_yojson side records =
     List.map records ~f:(function
-      | `List [`String price; `Int qty] -> create_book_entry side (Fn.compose satoshis_int_of_float_exn Float.of_string price) (Fn.compose satoshis_int_of_float_exn Float.of_int qty) ()
-      | `List [`String price; `Float qty] -> create_book_entry side (Fn.compose satoshis_int_of_float_exn Float.of_string price) (satoshis_int_of_float_exn qty) ()
+      | `List [`String price; `Int qty] -> DB.create_book_entry side (Fn.compose satoshis_int_of_float_exn Float.of_string price) (Fn.compose satoshis_int_of_float_exn Float.of_int qty) ()
+      | `List [`String price; `Float qty] -> DB.create_book_entry side (Fn.compose satoshis_int_of_float_exn Float.of_string price) (satoshis_int_of_float_exn qty) ()
       | #Yojson.Safe.json -> invalid_arg "books_of_yojson (record)")
 
   type book_raw = {
@@ -52,8 +39,8 @@ module Rest = struct
   } [@@deriving yojson]
 
   type books = {
-    asks: book_entry list;
-    bids: book_entry list;
+    asks: DB.book_entry list;
+    bids: DB.book_entry list;
     isFrozen: bool;
     seq: int;
   } [@@deriving create]
@@ -107,7 +94,7 @@ let book_of_book_raw { rate; typ; amount } =
   let side = match typ with "bid" -> Side.Bid | "ask" -> Ask | _ -> invalid_arg "book_of_book_raw" in
   let price = Fn.compose satoshis_int_of_float_exn Float.of_string rate in
   let qty = Option.value_map amount ~default:0 ~f:(Fn.compose satoshis_int_of_float_exn Float.of_string) in
-  create_book_entry side price qty ()
+  DB.create_book_entry side price qty ()
 
   type t = {
     typ: string [@key "type"];
