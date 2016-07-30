@@ -272,6 +272,10 @@ module Ws = struct
 
     let subscribe ~id ~topic = create Subscribe id topic ()
     let unsubscribe ~id ~topic = create Unsubscribe id topic ()
+    let auth ~id ~topic ~key ~secret =
+      let nonce, signature = Crypto.sign ~secret ~verb:`GET ~endp:"realtimemd" `Ws in
+      let payload = create_query ~op:"authKey" ~args:(`List [`String key; `String nonce; `String signature]) () |> query_to_yojson in
+      create ~typ:Message ~id ~topic ~payload ()
     let message ~id ~topic ~payload = create ~typ:Message ~id ~topic ~payload ()
   end
 
