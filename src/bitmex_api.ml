@@ -297,7 +297,17 @@ module Ws = struct
         Uri_services.(tcp_port_of_uri uri)
     in
     let scheme = Option.value_exn ~message:"no scheme in uri" Uri.(scheme uri) in
-    let cur_ws_w = ref None in
+    let ws_w_mvar = Mvar.create () in
+    let rec loop_write mvar msg =
+      let mvar_ro = Mvar.read_only mvar in
+      Mvar.value_available mvar_ro >>= fun () ->
+      let w = Mvar.peek_exn mvar_ro in
+      if Pipe.is_closed w then begin
+        Mvar.take mvar_ro >>= fun _ ->
+        loop_write mvar msg
+      end
+      else Pipe.write w msg
+    in
     Option.iter to_ws ~f:(fun to_ws ->
         don't_wait_for @@
         Monitor.handle_errors
@@ -306,9 +316,7 @@ module Ws = struct
                ~f:(fun msg_json ->
                    let msg_str = Yojson.Safe.to_string msg_json in
                    maybe_debug log "-> %s" msg_str;
-                   match !cur_ws_w with
-                   | None -> Deferred.unit
-                   | Some w -> Pipe.write_if_open w msg_str
+                   loop_write ws_w_mvar msg_str
                  )
           )
           (fun exn -> maybe_error log "%s" @@ Exn.to_string exn)
@@ -321,7 +329,7 @@ module Ws = struct
         else return (r, w)
       end >>= fun (r, w) ->
       let ws_r, ws_w = Websocket_async.client_ez ?log ~heartbeat:(sec 25.) uri s r w in
-      cur_ws_w := Some ws_w;
+      Mvar.set ws_w_mvar ws_w;
       let cleanup () =
         Pipe.close_read ws_r;
         Deferred.all_unit [Reader.close r; Writer.close w]
