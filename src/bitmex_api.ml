@@ -241,6 +241,39 @@ module Ws = struct
     args: Yojson.Safe.json;
   } [@@deriving create,yojson]
 
+  module MD = struct
+    type typ = Message | Subscribe | Unsubscribe [@@deriving enum]
+    type t = {
+      typ: typ;
+      id: Uuid.t;
+      topic: string;
+      payload: Yojson.Safe.json option;
+    } [@@deriving create]
+
+    let of_yojson = function
+    | `List (`Int typ :: `String id :: `String topic :: payload) -> begin
+        try
+          let payload = match payload with
+          | [] -> None
+          | [payload] -> Some payload
+          | _ -> raise Exit
+          in
+          Result.return @@ create
+            ~typ:(Option.value_exn (typ_of_enum typ))
+            ~id:(Uuid.of_string id)
+            ~topic ?payload ()
+        with _ -> Result.fail "MD.of_yojson"
+      end
+    | #Yojson.Safe.json -> Result.fail "MD.of_yojson"
+
+    let to_yojson { typ; id; topic; payload } =
+      let payload = match payload with None -> [] | Some p -> [p] in
+      `List (`Int (typ_to_enum typ) :: `String (Uuid.to_string id) :: `String topic :: payload)
+
+    let subscribe ~id ~topic = create Subscribe id topic ()
+    let unsubscribe ~id ~topic = create Unsubscribe id topic ()
+    let message ~id ~topic ~payload = create ~typ:Message ~id ~topic ~payload ()
+  end
 
   let uri_of_opts testnet md =
     Uri.with_path
