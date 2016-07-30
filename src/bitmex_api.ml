@@ -241,19 +241,22 @@ module Ws = struct
     args: Yojson.Safe.json;
   } [@@deriving create,yojson]
 
-  let uri = Uri.with_path uri "realtime"
-  let testnet_uri = Uri.with_path testnet_uri "realtime"
 
-  let open_connection ?(query_params=[]) ?log ?auth ~testnet ~topics () =
-    let uri = if testnet then testnet_uri else uri in
+  let uri_of_opts testnet md =
+    Uri.with_path
+      (if testnet then testnet_uri else uri)
+      (if md then "realtimemd" else "realtime")
+
+  let open_connection ?to_ws ?(query_params=[]) ?log ?auth ~testnet ~md ~topics () =
+    let uri = uri_of_opts testnet md in
     let auth_params = match auth with
       | None -> []
       | Some (key, secret) -> Crypto.mk_query_params ?log ~key ~secret `Ws `GET uri
     in
+    let uri = Uri.add_query_param uri ("heartbeat", ["true"]) in
     let uri = Uri.add_query_params uri @@
-      ["heartbeat", ["true"];
-       "subscribe", topics
-      ] @ auth_params @ query_params
+      if md then [] else
+      ["subscribe", topics] @ auth_params @ query_params
     in
     let uri_str = Uri.to_string uri in
     let host = Option.value_exn ~message:"no host in uri" Uri.(host uri) in
@@ -261,6 +264,22 @@ module Ws = struct
         Uri_services.(tcp_port_of_uri uri)
     in
     let scheme = Option.value_exn ~message:"no scheme in uri" Uri.(scheme uri) in
+    let cur_ws_w = ref None in
+    Option.iter to_ws ~f:(fun to_ws ->
+        don't_wait_for @@
+        Monitor.handle_errors
+          (fun () ->
+             Pipe.iter ~continue_on_error:true to_ws
+               ~f:(fun msg_json ->
+                   let msg_str = Yojson.Safe.to_string msg_json in
+                   maybe_debug log "-> %s" msg_str;
+                   match !cur_ws_w with
+                   | None -> Deferred.unit
+                   | Some w -> Pipe.write_if_open w msg_str
+                 )
+          )
+          (fun exn -> maybe_error log "%s" @@ Exn.to_string exn)
+      );
     let client_r, client_w = Pipe.create () in
     let tcp_fun s r w =
       Socket.(setopt s Opt.nodelay true);
@@ -269,6 +288,7 @@ module Ws = struct
         else return (r, w)
       end >>= fun (r, w) ->
       let ws_r, ws_w = Websocket_async.client_ez ?log ~heartbeat:(sec 25.) uri s r w in
+      cur_ws_w := Some ws_w;
       let cleanup () =
         Pipe.close_read ws_r;
         Deferred.all_unit [Reader.close r; Writer.close w]

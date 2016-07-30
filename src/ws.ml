@@ -20,18 +20,21 @@ let base_spec =
   +> flag "-cfg" (optional_with_default default_cfg string) ~doc:"path Filepath of cfg (default: ~/.virtu)"
   +> flag "-loglevel" (optional int) ~doc:"1-3 loglevel"
   +> flag "-testnet" no_arg ~doc:" Use testnet"
+  +> flag "-md" no_arg ~doc:" Use multiplexing"
   +> anon (sequence ("topic" %: string))
 
-let bitmex key secret testnet topics =
-  let r = BMEX.Ws.open_connection ~auth:(key, secret) ~testnet ~topics () in
+let bitmex key secret testnet md topics =
+  let buf = Bi_outbuf.create 4096 in
+  let to_ws = Pipe.map Reader.(stdin |> Lazy.force |> pipe) ~f:(Yojson.Safe.from_string ~buf) in
+  let r = BMEX.Ws.open_connection ~to_ws ~log:Lazy.(force log) ~auth:(key, secret) ~testnet ~topics ~md () in
   Pipe.transfer r Writer.(pipe @@ Lazy.force stderr) ~f:(fun s -> s ^ "\n")
 
 let bitmex =
-  let run cfg loglevel testnet topics =
+  let run cfg loglevel testnet md topics =
     let exchange = "BMEX" ^ (if testnet then "T" else "") in
     let key, secret = find_auth cfg exchange in
     Option.iter loglevel ~f:(Fn.compose set_level loglevel_of_int);
-    don't_wait_for @@ bitmex key secret testnet topics;
+    don't_wait_for @@ bitmex key secret testnet md topics;
     never_returns @@ Scheduler.go ()
   in
   Command.basic ~summary:"BitMEX WS client" base_spec run
@@ -47,7 +50,7 @@ let bfx key secret topics =
   Pipe.transfer r Writer.(pipe @@ Lazy.force stderr) ~f:(fun s -> s ^ "\n")
 
 let bfx =
-  let run cfg loglevel _testnet topics =
+  let run cfg loglevel _testnet _md topics =
     let key, secret = find_auth cfg "BFX" in
     Option.iter loglevel ~f:(Fn.compose set_level loglevel_of_int);
     don't_wait_for @@ bfx key secret topics;
@@ -63,7 +66,7 @@ let plnx topics =
     ~f:(fun msg -> msg |> Wamp.msg_to_yojson |> Yojson.Safe.to_string ~buf |> fun msg_str -> msg_str ^ "\n")
 
 let plnx =
-  let run cfg loglevel _testnet topics =
+  let run cfg loglevel _testnet _md topics =
     Option.iter loglevel ~f:(Fn.compose set_level loglevel_of_int);
     don't_wait_for @@ plnx topics;
     never_returns @@ Scheduler.go ()
