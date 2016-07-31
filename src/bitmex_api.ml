@@ -85,10 +85,8 @@ end
 
 module Crypto = struct
   let gen_nonce = function
-  | `Rest ->
-    Time_ns.(now () |> to_int_ns_since_epoch) / 1_000_000_000 + 5 |> Int.to_string
-  | `Ws ->
-    Time_ns.(now () |> to_int_ns_since_epoch) / 1_000_000 |> Int.to_string
+  | `Rest -> Time_ns.(now () |> to_int_ns_since_epoch) / 1_000_000_000 + 5
+  | `Ws -> Time_ns.(now () |> to_int_ns_since_epoch) / 1_000_000
 
   let sign ?log ?(data="") ~secret ~verb ~endp kind =
     let verb_str = match verb with
@@ -98,14 +96,16 @@ module Crypto = struct
       | `DELETE -> "DELETE"
     in
     let nonce = gen_nonce kind in
-    maybe_debug log "sign %s" nonce;
-    let prehash = verb_str ^ endp ^ nonce ^ data in
-    match Hex.(of_cstruct Nocrypto.Hash.SHA256.(hmac ~key:secret Cstruct.(of_string prehash))) with `Hex sign -> nonce, sign
+    let nonce_str = Int.to_string nonce in
+    maybe_debug log "sign %s" nonce_str;
+    let prehash = verb_str ^ endp ^ nonce_str ^ data in
+    match Hex.(of_cstruct Nocrypto.Hash.SHA256.(hmac ~key:secret Cstruct.(of_string prehash))) with `Hex sign ->
+      nonce, sign
 
   let mk_query_params ?log ?(data="") ~key ~secret kind verb uri =
     let endp = Uri.path_and_query uri in
     let nonce, signature = sign ?log ~secret ~verb ~endp ~data kind in
-    [ (match kind with `Rest -> "api-expires" | `Ws -> "api-nonce"), [nonce];
+    [ (match kind with `Rest -> "api-expires" | `Ws -> "api-nonce"), [Int.to_string nonce];
       "api-key", [key];
       "api-signature", [signature];
     ]
@@ -273,8 +273,8 @@ module Ws = struct
     let subscribe ~id ~topic = create Subscribe id topic ()
     let unsubscribe ~id ~topic = create Unsubscribe id topic ()
     let auth ~id ~topic ~key ~secret =
-      let nonce, signature = Crypto.sign ~secret ~verb:`GET ~endp:"realtimemd" `Ws in
-      let payload = create_query ~op:"authKey" ~args:(`List [`String key; `String nonce; `String signature]) () |> query_to_yojson in
+      let nonce, signature = Crypto.sign ~secret ~verb:`GET ~endp:"realtime" `Ws in
+      let payload = create_query ~op:"authKey" ~args:(`List [`String key; `Int nonce; `String signature]) () |> query_to_yojson in
       create ~typ:Message ~id ~topic ~payload ()
     let message ~id ~topic ~payload = create ~typ:Message ~id ~topic ~payload ()
   end
