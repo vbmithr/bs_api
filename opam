@@ -13,8 +13,7 @@ depends: [
   "ocamlfind" {build}
   "ocamlbuild" {build}
   "topkg" {build}
-  "core"
-  "async"
+  "async_ssl"
   "bs_devkit"
   "nocrypto"
   "hex"
