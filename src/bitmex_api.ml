@@ -212,9 +212,7 @@ module Ws = struct
     end
   end
 
-  type error = {
-    error: string;
-  } [@@deriving yojson]
+  type error = { error: string } [@@deriving yojson]
 
   type response = {
     success: bool;
@@ -238,6 +236,21 @@ module Ws = struct
     op: string;
     args: Yojson.Safe.json;
   } [@@deriving create,yojson]
+
+  type msg =
+    | Welcome
+    | Ok of response
+    | Error of string
+    | Update of update
+
+  let msg_of_yojson = function
+  | (`Assoc fields) as json ->
+    if List.Assoc.mem fields "info" && List.Assoc.mem fields "version" then Welcome
+    else if List.Assoc.mem fields "error" then Error (error_of_yojson json |> Result.ok_or_failwith |> fun { error } -> error)
+    else if List.Assoc.mem fields "success" then Ok (response_of_yojson json |> Result.ok_or_failwith)
+    else if List.Assoc.mem fields "table" then Update (update_of_yojson json |> Result.ok_or_failwith)
+    else invalid_arg "msg_of_yojson"
+  | #Yojson.Safe.json -> invalid_arg "msg_of_yojson"
 
   module MD = struct
     type typ = Message | Subscribe | Unsubscribe [@@deriving enum]
