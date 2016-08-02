@@ -214,12 +214,17 @@ module Ws = struct
 
   type error = { error: string } [@@deriving yojson]
 
+  type request = {
+    op: string;
+    args: Yojson.Safe.json list;
+  } [@@deriving create, show, yojson]
+
   type response = {
     success: bool;
     symbol: (string [@default ""]);
     subscribe: (string [@default ""]);
     account: (int [@default 0]);
-    request: Yojson.Safe.json;
+    request: request;
   } [@@deriving show, yojson]
 
   type update = {
@@ -231,11 +236,6 @@ module Ws = struct
     action: string;
     data: Yojson.Safe.json list;
   } [@@deriving show, yojson]
-
-  type query = {
-    op: string;
-    args: Yojson.Safe.json;
-  } [@@deriving create,yojson]
 
   type msg =
     | Welcome
@@ -285,7 +285,7 @@ module Ws = struct
     let unsubscribe ~id ~topic = create Unsubscribe id topic ()
     let auth ~id ~topic ~key ~secret =
       let nonce, signature = Crypto.sign ~secret ~verb:`GET ~endp:"/realtime" `Ws in
-      let payload = create_query ~op:"authKey" ~args:(`List [`String key; `Int nonce; `String signature]) () |> query_to_yojson in
+      let payload = create_request ~op:"authKey" ~args:[`String key; `Int nonce; `String signature] () |> request_to_yojson in
       create ~typ:Message ~id ~topic ~payload ()
     let message ~id ~topic ~payload = create ~typ:Message ~id ~topic ~payload ()
   end
