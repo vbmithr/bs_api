@@ -210,6 +210,10 @@ module Ws = struct
       let pp_json fmt json = Format.fprintf fmt "%s" @@ to_string json
       let show_json json = Format.(fprintf str_formatter "%a" pp_json json)
     end
+
+    module Basic = struct
+      include Yojson.Basic
+    end
   end
 
   type error = { error: string } [@@deriving yojson]
@@ -249,8 +253,8 @@ module Ws = struct
     else if List.Assoc.mem fields "error" then Error (error_of_yojson json |> Result.ok_or_failwith |> fun { error } -> error)
     else if List.Assoc.mem fields "success" then Ok (response_of_yojson json |> Result.ok_or_failwith)
     else if List.Assoc.mem fields "table" then Update (update_of_yojson json |> Result.ok_or_failwith)
-    else invalid_arg "msg_of_yojson"
-  | #Yojson.Safe.json -> invalid_arg "msg_of_yojson"
+    else invalid_argf "Ws.msg_of_yojson: %s" Yojson.Safe.(to_string json) ()
+  | #Yojson.Safe.json as json -> invalid_argf "Ws.msg_of_yojson: %s" Yojson.Safe.(to_string json) ()
 
   module MD = struct
     type typ = Message | Subscribe | Unsubscribe [@@deriving enum]
@@ -467,21 +471,22 @@ let ord_type_of_string = function
   | "Stop" -> Stop
   | "StopLimit" -> Stop_limit
   | "MarketIfTouched" -> Market_if_touched
-  | _ -> invalid_arg "ord_type_of_string"
+  | s -> invalid_argf "ord_type_of_string: %s" s ()
 
 let string_of_tif = function
   | Dtc.TimeInForce.Day -> "Day"
-  | Good_till_canceled | All_or_none -> "GoodTillCancel"
+  | Good_till_canceled
+  | All_or_none -> "GoodTillCancel"
   | Immediate_or_cancel -> "ImmediateOrCancel"
   | Fill_or_kill -> "FillOrKill"
-  | _ -> invalid_arg "string_of_tif"
+  | Good_till_date_time -> invalid_arg "string_of_tif: unsupported Good_till_date_time"
 
 let tif_of_string = function
   | "Day" -> Dtc.TimeInForce.Day
   | "GoodTillCancel" -> Good_till_canceled
   | "ImmediateOrCancel" -> Immediate_or_cancel
   | "FillOrKill" -> Fill_or_kill
-  | _ -> invalid_arg "tif_of_string"
+  | s -> invalid_argf "tif_of_string: %s" s ()
 
 let p1_p2_of_bitmex ~ord_type ~stopPx ~price = match ord_type with
   | Dtc.OrderType.Market -> None, None
@@ -526,12 +531,12 @@ let update_action_of_string = function
   | "insert" -> Insert
   | "update"  -> Update
   | "delete" -> Delete
-  | _ -> invalid_arg "update_action_of_bitmex"
+  | s -> invalid_argf "update_action_of_bitmex: %s" s ()
 
 let buy_sell_of_bmex = function
   | "Buy" -> Dtc.Buy
   | "Sell" -> Sell
-  | _ -> invalid_arg "buy_sell_of_bmex"
+  | s -> invalid_argf "buy_sell_of_bmex: %s" s ()
 
 let bmex_of_buy_sell = function
   | Dtc.Buy -> "Buy"
