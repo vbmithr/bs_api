@@ -22,7 +22,7 @@ module Instrument = struct
     Response.create
       ~symbol
       ~exchange
-      ~security_type:(if index then `Index else `Future)
+      ~security_type:(if index then Index else Futures)
       ~descr:""
       ~min_price_increment:tickSize
       ~price_display_format:(Dtc.price_display_format_of_ticksize tickSize)
@@ -455,41 +455,40 @@ module Trade = struct
 end
 
 let string_of_ord_type = function
-  | `Market -> "Market"
-  | `Limit -> "Limit"
-  | `Stop -> "Stop"
-  | `Stop_limit -> "StopLimit"
-  | `Market_if_touched -> "MarketIfTouched"
-  | #Dtc.order_type -> invalid_arg "string_of_ord_type"
+  | Dtc.OrderType.Market -> "Market"
+  | Limit -> "Limit"
+  | Stop -> "Stop"
+  | Stop_limit -> "StopLimit"
+  | Market_if_touched -> "MarketIfTouched"
 
 let ord_type_of_string = function
-  | "Market" -> `Market
-  | "Limit" -> `Limit
-  | "Stop" -> `Stop
-  | "StopLimit" -> `Stop_limit
-  | "MarketIfTouched" -> `Market_if_touched
+  | "Market" -> Dtc.OrderType.Market
+  | "Limit" -> Limit
+  | "Stop" -> Stop
+  | "StopLimit" -> Stop_limit
+  | "MarketIfTouched" -> Market_if_touched
   | _ -> invalid_arg "ord_type_of_string"
 
 let string_of_tif = function
-  | `Day -> "Day"
-  | `Good_till_canceled | `All_or_none -> "GoodTillCancel"
-  | `Immediate_or_cancel -> "ImmediateOrCancel"
-  | `Fill_or_kill -> "FillOrKill"
-  | #Dtc.time_in_force -> invalid_arg "string_of_tif"
+  | Dtc.TimeInForce.Day -> "Day"
+  | Good_till_canceled | All_or_none -> "GoodTillCancel"
+  | Immediate_or_cancel -> "ImmediateOrCancel"
+  | Fill_or_kill -> "FillOrKill"
+  | _ -> invalid_arg "string_of_tif"
 
 let tif_of_string = function
-  | "Day" -> `Day
-  | "GoodTillCancel" -> `Good_till_canceled
-  | "ImmediateOrCancel" -> `Immediate_or_cancel
-  | "FillOrKill" -> `Fill_or_kill
+  | "Day" -> Dtc.TimeInForce.Day
+  | "GoodTillCancel" -> Good_till_canceled
+  | "ImmediateOrCancel" -> Immediate_or_cancel
+  | "FillOrKill" -> Fill_or_kill
   | _ -> invalid_arg "tif_of_string"
 
 let p1_p2_of_bitmex ~ord_type ~stopPx ~price = match ord_type with
-  | `Market -> None, None
-  | `Limit -> Some price, None
-  | `Stop -> Some stopPx, None
-  | `Stop_limit -> Some stopPx, Some price
-  | `Market_if_touched -> Some stopPx, None
+  | Dtc.OrderType.Market -> None, None
+  | Limit -> Some price, None
+  | Stop -> Some stopPx, None
+  | Stop_limit -> Some stopPx, Some price
+  | Market_if_touched -> Some stopPx, None
 
 let string_of_stop_exec_inst = function
   | `MarkPrice -> "MarkPrice"
@@ -497,27 +496,30 @@ let string_of_stop_exec_inst = function
 
 let price_fields_of_dtc ?p1 ?p2 ord_type =
   match ord_type with
-  | `Unset | `Market -> []
-  | `Limit -> (match p1 with None -> [] | Some p1 -> ["price", `Float p1])
-  | `Stop | `Market_if_touched ->
-    (match p1 with
-     | None -> invalid_arg "price_field_of_dtc" (* Cannot happen *)
-     | Some p1 -> ["stopPx", `Float p1]
-    )
-  | `Stop_limit ->
-    List.filter_opt
-      [Option.map p1 ~f:(fun p1 -> "stopPx", `Float p1);
-       Option.map p2 ~f:(fun p2 -> "price", `Float p2);
-      ]
+  | Dtc.OrderType.Market -> []
+  | Limit -> begin match p1 with
+    | None -> []
+    | Some p1 -> ["price", `Float p1]
+    end
+  | Stop | Market_if_touched -> begin match p1 with
+    | None -> invalid_arg "price_field_of_dtc" (* Cannot happen *)
+    | Some p1 -> ["stopPx", `Float p1]
+    end
+  | Stop_limit ->
+    List.filter_opt [
+      Option.map p1 ~f:(fun p1 -> "stopPx", `Float p1);
+      Option.map p2 ~f:(fun p2 -> "price", `Float p2);
+    ]
 
 let execInst_of_dtc ord_type tif stop_exec_inst =
   let sei_str = string_of_stop_exec_inst stop_exec_inst in
   let execInst = match ord_type with
-    | `Stop | `Market_if_touched | `Stop_limit -> [sei_str]
-    | #Dtc.order_type -> []
-  in match tif with
-  | `All_or_none -> ["execInst", `String (String.concat ~sep:"," ("AllOrNone" :: execInst)); "displayQty", `Float 0.]
-  | #Dtc.time_in_force -> List.map execInst ~f:(fun ei -> "execInst", `String ei)
+    | Dtc.OrderType.Stop | Market_if_touched | Stop_limit -> [sei_str]
+    | _ -> []
+  in
+  match tif with
+  | Dtc.TimeInForce.All_or_none -> ["execInst", `String (String.concat ~sep:"," ("AllOrNone" :: execInst)); "displayQty", `Float 0.]
+  | _ -> List.map execInst ~f:(fun ei -> "execInst", `String ei)
 
 let update_action_of_string = function
   | "partial" -> OB.Partial
@@ -527,10 +529,10 @@ let update_action_of_string = function
   | _ -> invalid_arg "update_action_of_bitmex"
 
 let buy_sell_of_bmex = function
-  | "Buy" -> `Buy
-  | "Sell" -> `Sell
+  | "Buy" -> Dtc.Buy
+  | "Sell" -> Sell
   | _ -> invalid_arg "buy_sell_of_bmex"
 
 let bmex_of_buy_sell = function
-  | `Buy -> "Buy"
-  | `Sell -> "Sell"
+  | Dtc.Buy -> "Buy"
+  | Sell -> "Sell"
