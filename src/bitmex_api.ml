@@ -220,7 +220,7 @@ module Ws = struct
 
   type request = {
     op: string;
-    args: Yojson.Safe.json list;
+    args: Yojson.Safe.json;
   } [@@deriving create, show, yojson]
 
   type response = {
@@ -289,7 +289,7 @@ module Ws = struct
     let unsubscribe ~id ~topic = create Unsubscribe id topic ()
     let auth ~id ~topic ~key ~secret =
       let nonce, signature = Crypto.sign ~secret ~verb:`GET ~endp:"/realtime" `Ws in
-      let payload = create_request ~op:"authKey" ~args:[`String key; `Int nonce; `String signature] () |> request_to_yojson in
+      let payload = create_request ~op:"authKey" ~args:(`List [`String key; `Int nonce; `String signature]) () |> request_to_yojson in
       create ~typ:Message ~id ~topic ~payload ()
     let message ~id ~topic ~payload = create ~typ:Message ~id ~topic ~payload ()
   end
