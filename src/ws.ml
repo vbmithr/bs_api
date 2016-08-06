@@ -27,7 +27,7 @@ let bitmex key secret testnet md topics =
   let buf = Bi_outbuf.create 4096 in
   let to_ws = Pipe.map Reader.(stdin |> Lazy.force |> pipe) ~f:(Yojson.Safe.from_string ~buf) in
   let r = BMEX.Ws.open_connection ~to_ws ~log:Lazy.(force log) ~auth:(key, secret) ~testnet ~topics ~md () in
-  Pipe.transfer r Writer.(pipe @@ Lazy.force stderr) ~f:(fun s -> s ^ "\n")
+  Pipe.transfer r Writer.(pipe @@ Lazy.force stderr) ~f:(fun s -> Yojson.Safe.to_string ~buf s ^ "\n")
 
 let bitmex =
   let run cfg loglevel testnet md topics =

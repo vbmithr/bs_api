@@ -299,7 +299,7 @@ module Ws = struct
       (if testnet then testnet_uri else uri)
       (if md then "realtimemd" else "realtime")
 
-  let open_connection ?to_ws ?(query_params=[]) ?log ?auth ~testnet ~md ~topics () =
+  let open_connection ?(buf=Bi_outbuf.create 4096) ?to_ws ?(query_params=[]) ?log ?auth ~testnet ~md ~topics () =
     let uri = uri_of_opts testnet md in
     let auth_params = match auth with
       | None -> []
@@ -354,7 +354,7 @@ module Ws = struct
         Deferred.all_unit [Reader.close r; Writer.close w]
       in
       maybe_info log "[WS] connecting to %s" uri_str;
-      Monitor.protect ~finally:cleanup (fun () -> Pipe.transfer_id ws_r client_w)
+      Monitor.protect ~finally:cleanup (fun () -> Pipe.transfer ws_r client_w ~f:(Yojson.Safe.from_string ~buf))
     in
     let rec loop () =
       begin
