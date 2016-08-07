@@ -148,6 +148,14 @@ module Rest = struct
     Cohttp.Header.of_list @@
     ("content-type", "application/json") :: List.Assoc.map query_params ~f:List.hd_exn
 
+  module Position = struct
+    let position ?log ~testnet ~key ~secret () =
+      let uri = Uri.with_path (if testnet then testnet_uri else uri) "/api/v1/position" in
+      let headers = mk_headers ?log ~key ~secret `GET uri in
+      Client.get ~headers uri >>=
+      handle_rest_error ?log ~name:"position"
+  end
+
   module Order = struct
     let submit ?log ~testnet ~key ~secret orders =
       let uri = Uri.with_path (if testnet then testnet_uri else uri) "/api/v1/order/bulk" in
