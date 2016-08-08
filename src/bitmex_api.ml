@@ -389,13 +389,30 @@ module Ws = struct
       exchanges: Yojson.Safe.json [@default `Null];
     } [@@deriving yojson]
 
-    type msg = {
+    type evt = {
       exchange: string;
       channel: string;
       data: data;
     } [@@deriving yojson]
 
-    let tickers ?log () =
+    type exchange = {
+      name: string;
+      channels: string list;
+    } [@@deriving create, yojson]
+
+    type msg = {
+      typ: string [@key "type"];
+      exchanges: exchange list;
+    } [@@deriving create, yojson]
+
+    let subscribe exchanges =
+      let exchanges = List.map exchanges ~f:begin fun name ->
+          create_exchange ~name ~channels:["ticker"] ()
+        end
+      in
+      create_msg ~typ:"subscribe" ~exchanges ()
+
+    let tickers ?log exchanges =
       let buf = Bi_outbuf.create 1024 in
       let uri = Uri.of_string "https://markets.kaiko.com:8080/v1" in
       let uri_str = Uri.to_string uri in
@@ -405,6 +422,7 @@ module Ws = struct
       in
       let scheme = Option.value_exn ~message:"no scheme in uri" Uri.(scheme uri) in
       let client_r, client_w = Pipe.create () in
+      let subscribe_msg_str = subscribe exchanges |> msg_to_yojson |> Yojson.Safe.to_string ~buf in
       let tcp_fun s r w =
         Socket.(setopt s Opt.nodelay true);
         begin
@@ -417,28 +435,25 @@ module Ws = struct
           Deferred.all_unit [Reader.close r; Writer.close w]
         in
         maybe_info log "[WS] connecting to %s" uri_str;
-        Monitor.protect ~finally:cleanup (fun () ->
-            Pipe.write ws_w {|{ "type": "subscribe", "exchanges": [ { "name": "bitmex", "channels": ["ticker"] } ] }|} >>= fun () ->
-            Pipe.transfer' ws_r client_w ~f:(fun msgq ->
-                return @@ Queue.filter_map msgq
-                  ~f:(fun msg_str ->
-                      Yojson.Safe.from_string ~buf msg_str |>
-                      msg_of_yojson |> function
-                      | Ok msg -> Some msg.data
-                      | Error msg ->
-                        maybe_error log "%s: %s" msg msg_str;
-                        None
-                    )
-              )
-          )
+        Monitor.protect ~finally:cleanup begin fun () ->
+          Pipe.write ws_w subscribe_msg_str >>= fun () ->
+          Pipe.transfer' ws_r client_w ~f:begin fun msgq ->
+            return @@ Queue.filter_map msgq ~f:begin fun msg_str ->
+              Yojson.Safe.from_string ~buf msg_str |> evt_of_yojson |> function
+              | Ok evt -> Some evt.data
+              | Error msg ->
+                maybe_error log "%s: %s" msg msg_str;
+                None
+            end
+          end
+        end
       in
-      let rec loop () =
-        begin
-          Monitor.try_with_or_error ~name:"with_connection" (fun () ->
-              Tcp.(with_connection (to_host_and_port host port) tcp_fun)) >>| function
-          | Ok () -> maybe_error log "[WS] connection to %s terminated" uri_str;
-          | Error err -> maybe_error log "[WS] connection to %s raised %s" uri_str (Error.to_string_hum err)
-        end >>= fun () ->
+      let rec loop () = begin
+        Monitor.try_with_or_error ~name:"with_connection" (fun () ->
+            Tcp.(with_connection (to_host_and_port host port) tcp_fun)) >>| function
+        | Ok () -> maybe_error log "[WS] connection to %s terminated" uri_str;
+        | Error err -> maybe_error log "[WS] connection to %s raised %s" uri_str (Error.to_string_hum err)
+      end >>= fun () ->
         if Pipe.is_closed client_r then Deferred.unit
         else begin
           maybe_error log "[WS] restarting connection to %s" uri_str;

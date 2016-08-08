@@ -39,6 +39,23 @@ let bitmex =
   in
   Command.basic ~summary:"BitMEX WS client" base_spec run
 
+let kaiko topics =
+  let open BMEX.Ws.Kaiko in
+  let buf = Bi_outbuf.create 4096 in
+  let r = tickers ~log:Lazy.(force log) topics in
+  Pipe.transfer r Writer.(pipe @@ Lazy.force stderr) ~f:begin fun data ->
+    let json = data_to_yojson data  in
+    Yojson.Safe.to_string ~buf json ^ "\n"
+  end
+
+let kaiko =
+  let run _cfg loglevel _testnet _md topics =
+    Option.iter loglevel ~f:(Fn.compose set_level loglevel_of_int);
+    don't_wait_for @@ kaiko topics;
+    never_returns @@ Scheduler.go ()
+  in
+  Command.basic ~summary:"Kaiko WS client" base_spec run
+
 let bfx key secret topics =
   let evts = List.map topics ~f:(fun ts ->
       match String.split ts ~on:':' with
@@ -79,6 +96,7 @@ let command =
       "bitmex", bitmex;
       "bfx", bfx;
       "plnx", plnx;
+      "kaiko", kaiko;
     ]
 
 let () = Command.run command
