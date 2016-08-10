@@ -141,34 +141,34 @@ let book_of_book_raw { rate; typ; amount } =
     let scheme =
       Option.value_exn ~message:"no scheme in uri" Uri.(scheme uri) in
     let write_wamp w msg =
-      let msg_str = Wamp.msg_to_yojson msg |> Yojson.Safe.to_string ~buf in
+      let msg_str = Wamp_yojson.msg_to_yojson msg |> Yojson.Safe.to_string ~buf in
       maybe_debug log "-> %s" msg_str;
       Pipe.write w msg_str
     in
     let read_wamp_exn json_str =
       maybe_debug log "<- %s" json_str;
       Yojson.Safe.from_string ~buf json_str |>
-      Wamp.msg_of_yojson |>
+      Wamp_yojson.msg_of_yojson |>
       Result.ok_or_failwith
     in
     let transfer_f q =
       return @@ Queue.filter_map q ~f:(fun msg_str ->
           maybe_debug log "<- %s" msg_str;
-          match Fn.compose Wamp.msg_of_yojson (Yojson.Safe.from_string ~buf) msg_str with
+          match Fn.compose Wamp_yojson.msg_of_yojson (Yojson.Safe.from_string ~buf) msg_str with
           | Ok msg -> Some msg
           | Error msg -> maybe_error log "%s" msg; None
         )
     in
     let subscribe ~topics r w =
       Deferred.List.map ~how:`Sequential topics ~f:begin fun topic ->
-          let request_id, subscribe_msg = Wamp.subscribe topic in
+          let request_id, subscribe_msg = Wamp_yojson.subscribe topic in
           write_wamp w subscribe_msg
       end
     in
     let client_r, client_w = Pipe.create () in
     let process_ws r w =
       (* Initialize *)
-      write_wamp w Wamp.(hello (Uri.of_string "realm1") [Subscriber]) >>= fun () ->
+      write_wamp w Wamp_yojson.(hello (Uri.of_string "realm1") [Subscriber]) >>= fun () ->
       Pipe.read r >>= function
       | `Eof -> raise End_of_file
       | `Ok msg ->

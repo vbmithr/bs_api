@@ -11,5 +11,5 @@ true : bin_annot, safe_string, package(bytes), warn(-40)
        package(dtc), \
        package(cohttp.async), \
        package(websocket.async), \
-       package(wamp), \
+       package(wamp.yojson), \
        thread
