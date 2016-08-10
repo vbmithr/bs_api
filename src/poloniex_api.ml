@@ -132,7 +132,7 @@ let book_of_book_raw { rate; typ; amount } =
         ~high24h ~low24h ()
     | #Yojson.Safe.json as json -> invalid_argf "ticker_of_json: %s" Yojson.Safe.(to_string json) ()
 
-  let open_connection ?(buf=Bi_outbuf.create 4096) ?log ~topics () =
+  let open_connection ?log_ws ?log ~topics () =
     let uri_str = "https://api.poloniex.com" in
     let uri = Uri.of_string uri_str in
     let host = Option.value_exn ~message:"no host in uri" Uri.(host uri) in
@@ -140,35 +140,38 @@ let book_of_book_raw { rate; typ; amount } =
         Uri_services.(tcp_port_of_uri uri) in
     let scheme =
       Option.value_exn ~message:"no scheme in uri" Uri.(scheme uri) in
+    let buf = BytesLabels.create 4096 in
     let write_wamp w msg =
-      let msg_str = Wamp_yojson.msg_to_yojson msg |> Yojson.Safe.to_string ~buf in
-      maybe_debug log "-> %s" msg_str;
-      Pipe.write w msg_str
+      let nb_written = Wamp_msgpck.msg_to_msgpck msg |> Msgpck.String.write buf in
+      let serialized_msg = BytesLabels.sub_string buf 0 nb_written in
+      maybe_debug log "-> %s" (Wamp.sexp_of_msg Msgpck.sexp_of_t msg |> Sexplib.Sexp.to_string);
+      Pipe.write w serialized_msg
     in
-    let read_wamp_exn json_str =
-      maybe_debug log "<- %s" json_str;
-      Yojson.Safe.from_string ~buf json_str |>
-      Wamp_yojson.msg_of_yojson |>
-      Result.ok_or_failwith
+    let read_wamp_exn msg =
+      let _nb_read, msg = Msgpck.String.read msg in
+      maybe_debug log "<- %s" (Msgpck.sexp_of_t msg |> Sexplib.Sexp.to_string);
+      Result.ok_or_failwith @@ Wamp_msgpck.msg_of_msgpck msg
     in
     let transfer_f q =
       return @@ Queue.filter_map q ~f:(fun msg_str ->
-          maybe_debug log "<- %s" msg_str;
-          match Fn.compose Wamp_yojson.msg_of_yojson (Yojson.Safe.from_string ~buf) msg_str with
+          let _nb_read, msg = Msgpck.String.read msg_str in
+          match Wamp_msgpck.msg_of_msgpck msg with
           | Ok msg -> Some msg
           | Error msg -> maybe_error log "%s" msg; None
         )
     in
     let subscribe ~topics r w =
       Deferred.List.map ~how:`Sequential topics ~f:begin fun topic ->
-          let request_id, subscribe_msg = Wamp_yojson.subscribe topic in
+          let request_id, subscribe_msg = Wamp_msgpck.subscribe topic in
           write_wamp w subscribe_msg
       end
     in
     let client_r, client_w = Pipe.create () in
     let process_ws r w =
       (* Initialize *)
-      write_wamp w Wamp_yojson.(hello (Uri.of_string "realm1") [Subscriber]) >>= fun () ->
+      maybe_info log "[WS] connected to %s" uri_str;
+      let hello = Wamp_msgpck.(hello (Uri.of_string "realm1") [Subscriber]) in
+      write_wamp w hello >>= fun () ->
       Pipe.read r >>= function
       | `Eof -> raise End_of_file
       | `Ok msg ->
@@ -185,12 +188,11 @@ let book_of_book_raw { rate; typ; amount } =
         if scheme = "https" || scheme = "wss" then Conduit_async_ssl.ssl_connect r w
         else return (r, w)
       end >>= fun (r, w) ->
-      let extra_headers = Cohttp.Header.init_with "Sec-Websocket-Protocol" "wamp.2.json" in
+      let extra_headers = Cohttp.Header.init_with "Sec-Websocket-Protocol" "wamp.2.msgpack" in
       let ws_r, ws_w =
-        Websocket_async.client_ez ~extra_headers ~heartbeat:(sec 25.) uri s r w
+        Websocket_async.client_ez ?log:log_ws ~opcode:Binary ~extra_headers ~heartbeat:(sec 25.) uri s r w
       in
       let cleanup () = Deferred.all_unit [Reader.close r; Writer.close w] in
-      maybe_info log "[WS] connecting to %s" uri_str;
       Monitor.protect ~name:"process_ws" ~finally:cleanup (fun () -> process_ws ws_r ws_w)
     in
     let rec loop () = begin

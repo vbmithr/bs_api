@@ -77,10 +77,11 @@ let bfx =
 
 let plnx topics =
   let topics = List.map topics ~f:Uri.of_string in
-  let r = PLNX.Ws.open_connection ~topics () in
-  let buf = Bi_outbuf.create 4096 in
-  Pipe.transfer r Writer.(pipe @@ Lazy.force stderr) ~f:(fun msg ->
-      msg |> Wamp_yojson.msg_to_yojson |> Yojson.Safe.to_string ~buf |> fun msg_str -> msg_str ^ "\n")
+  let r = PLNX.Ws.open_connection ~log:(Lazy.force log) ~topics () in
+  Pipe.transfer r Writer.(pipe @@ Lazy.force stderr) ~f:begin fun msg ->
+    msg |> Wamp_msgpck.msg_to_msgpck |> Msgpck.sexp_of_t |> fun msg_str ->
+    Sexplib.Sexp.to_string msg_str ^ "\n"
+  end
 
 let plnx =
   let run cfg loglevel _testnet _md topics =

@@ -1,6 +1,6 @@
 description = "APIs to some bitcoin exchanges"
 version = "%%VERSION%%"
-requires = "core async bs_devkit nocrypto hex dtc cohttp.async websocket.async wamp"
+requires = "core async bs_devkit nocrypto hex dtc cohttp.async websocket.async wamp.msgpck"
 archive(byte) = "bitmex_api.cma bfx_api.cma poloniex_api.cma bs_api.cma"
 archive(native) = "bitmex_api.cmxa bfx_api.cmxa poloniex_api.cmxa bs_api.cmxa"
 plugin(byte) = "bitmex_api.cma bfx_api.cma poloniex_api.cma bs_api.cma"

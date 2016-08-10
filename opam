@@ -20,6 +20,7 @@ depends: [
   "dtc"
   "cohttp"
   "websocket"
+  "msgpck"
   "wamp"
 ]
 depopts: []
