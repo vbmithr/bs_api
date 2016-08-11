@@ -15,7 +15,7 @@ type trade_raw = {
   total: string;
 } [@@deriving create,yojson]
 
-let trade_of_trade_raw { date; typ; rate; amount; total } =
+let trade_of_trade_raw { date; typ; rate; amount } =
   let date = Time_ns.of_string date in
   let typ = match typ with "buy" -> BuyOrSell.Buy | "sell" -> Sell | _ -> invalid_arg "typ_of_string" in
   let rate = Fn.compose satoshis_int_of_float_exn Float.of_string rate in
@@ -84,23 +84,6 @@ module Rest = struct
 end
 
 module Ws = struct
-  type book_raw = {
-    rate: string;
-    typ: string [@key "type"];
-    amount: (string option [@default None]);
-  } [@@deriving yojson]
-
-let book_of_book_raw { rate; typ; amount } =
-  let side = match typ with "bid" -> Side.Bid | "ask" -> Ask | _ -> invalid_arg "book_of_book_raw" in
-  let price = Fn.compose satoshis_int_of_float_exn Float.of_string rate in
-  let qty = Option.value_map amount ~default:0 ~f:(Fn.compose satoshis_int_of_float_exn Float.of_string) in
-  DB.create_book_entry side price qty ()
-
-  type t = {
-    typ: string [@key "type"];
-    data: Yojson.Safe.json;
-  } [@@deriving yojson]
-
   type ticker = {
     symbol: string;
     last: float;
@@ -114,23 +97,10 @@ let book_of_book_raw { rate; typ; amount } =
     low24h: float;
   } [@@deriving show,create]
 
-  let ticker_of_json = function
-    | `List [`String symbol; `String last; `String ask; `String bid; `String pct_change;
-             `String base_volume; `String quote_volume; `Int is_frozen; `String high24h;
-             `String low24h
-            ] ->
-      let last = Float.of_string last in
-      let ask = Float.of_string ask in
-      let bid = Float.of_string bid in
-      let pct_change = Float.of_string pct_change in
-      let base_volume = Float.of_string base_volume in
-      let quote_volume = Float.of_string quote_volume in
-      let is_frozen = if is_frozen = 0 then false else true in
-      let high24h = Float.of_string high24h in
-      let low24h = Float.of_string low24h in
-      create_ticker ~symbol ~last ~ask ~bid ~pct_change ~base_volume ~quote_volume ~is_frozen
-        ~high24h ~low24h ()
-    | #Yojson.Safe.json as json -> invalid_argf "ticker_of_json: %s" Yojson.Safe.(to_string json) ()
+  type 'a t = {
+    typ: string [@key "type"];
+    data: 'a;
+  } [@@deriving create, yojson]
 
   let open_connection ?log_ws ?log ~topics () =
     let uri_str = "https://api.poloniex.com" in
@@ -217,4 +187,103 @@ let book_of_book_raw { rate; typ; amount } =
     in
     don't_wait_for @@ loop ();
     client_r
+
+  module Msgpck = struct
+    type nonrec t = Msgpck.t t
+
+    let map_of_msgpck = function
+    | Msgpck.Map elts ->
+      List.fold_left elts ~init:String.Map.empty ~f:begin fun a -> function
+      | String k, v -> String.Map.add a k v
+      | _ -> invalid_arg "map_of_msgpck"
+      end
+    | _ -> invalid_arg "map_of_msgpck"
+
+    let to_msgpck { typ; data } = Msgpck.(Map [String "type", String typ; String "data", data])
+    let of_msgpck elts =
+      try
+        let elts = map_of_msgpck elts in
+        let typ = String.Map.find_exn elts "type" |> Msgpck.to_string in
+        let data = String.Map.find_exn elts "data" in
+        Result.return (create ~typ ~data ())
+      with exn -> Result.failf "%s" (Exn.to_string exn)
+
+    let ticker_of_msgpck = function
+    | Msgpck.List [String symbol; String last; String ask; String bid; String pct_change;
+                   String base_volume; String quote_volume; Int is_frozen; String high24h;
+                   String low24h
+                  ] ->
+      let last = Float.of_string last in
+      let ask = Float.of_string ask in
+      let bid = Float.of_string bid in
+      let pct_change = Float.of_string pct_change in
+      let base_volume = Float.of_string base_volume in
+      let quote_volume = Float.of_string quote_volume in
+      let is_frozen = if is_frozen = 0 then false else true in
+      let high24h = Float.of_string high24h in
+      let low24h = Float.of_string low24h in
+      create_ticker ~symbol ~last ~ask ~bid ~pct_change ~base_volume ~quote_volume ~is_frozen
+        ~high24h ~low24h ()
+    | _ -> invalid_arg "ticker_of_msgpck"
+
+    let trade_of_msgpck msg = try
+      let msg = map_of_msgpck msg in
+      let date = String.Map.find_exn msg "date" |> Msgpck.to_string in
+      let side = String.Map.find_exn msg "type" |> Msgpck.to_string in
+      let rate = String.Map.find_exn msg "rate" |> Msgpck.to_string in
+      let amount = String.Map.find_exn msg "amount" |> Msgpck.to_string in
+      let date = Time_ns.of_string date in
+      let side = match side with "buy" -> BuyOrSell.Buy | "sell" -> Sell | _ -> invalid_arg "typ_of_string" in
+      let rate = Fn.compose satoshis_int_of_float_exn Float.of_string rate in
+      let amount = Fn.compose satoshis_int_of_float_exn Float.of_string amount in
+      DB.create_trade date side rate amount ()
+    with _ -> invalid_arg "trade_of_msgpck"
+
+    let book_of_msgpck msg = try
+      let msg = map_of_msgpck msg in
+      let side = String.Map.find_exn msg "type" |> Msgpck.to_string in
+      let price = String.Map.find_exn msg "rate" |> Msgpck.to_string in
+      let qty = String.Map.find msg "amount" |> Option.map ~f:Msgpck.to_string in
+      let side = match side with "bid" -> Side.Bid | "ask" -> Ask | _ -> invalid_arg "book_of_book_raw" in
+      let price = Fn.compose satoshis_int_of_float_exn Float.of_string price in
+      let qty = Option.value_map qty ~default:0 ~f:(Fn.compose satoshis_int_of_float_exn Float.of_string) in
+      DB.create_book_entry side price qty ()
+    with _ -> invalid_arg "book_of_msgpck"
+  end
+
+  module Yojson = struct
+    type nonrec t = Yojson.Safe.json t
+    let to_yojson = to_yojson Fn.id
+    let of_yojson = of_yojson (fun json -> Ok json)
+
+    let ticker_of_json = function
+    | `List [`String symbol; `String last; `String ask; `String bid; `String pct_change;
+             `String base_volume; `String quote_volume; `Int is_frozen; `String high24h;
+             `String low24h
+            ] ->
+      let last = Float.of_string last in
+      let ask = Float.of_string ask in
+      let bid = Float.of_string bid in
+      let pct_change = Float.of_string pct_change in
+      let base_volume = Float.of_string base_volume in
+      let quote_volume = Float.of_string quote_volume in
+      let is_frozen = if is_frozen = 0 then false else true in
+      let high24h = Float.of_string high24h in
+      let low24h = Float.of_string low24h in
+      create_ticker ~symbol ~last ~ask ~bid ~pct_change ~base_volume ~quote_volume ~is_frozen
+        ~high24h ~low24h ()
+    | #Yojson.Safe.json as json -> invalid_argf "ticker_of_json: %s" Yojson.Safe.(to_string json) ()
+
+    type book_raw = {
+      rate: string;
+      typ: string [@key "type"];
+      amount: (string option [@default None]);
+    } [@@deriving yojson]
+
+    let book_of_book_raw { rate; typ; amount } =
+      let side = match typ with "bid" -> Side.Bid | "ask" -> Ask | _ -> invalid_arg "book_of_book_raw" in
+      let price = Fn.compose satoshis_int_of_float_exn Float.of_string rate in
+      let qty = Option.value_map amount ~default:0 ~f:(Fn.compose satoshis_int_of_float_exn Float.of_string) in
+      DB.create_book_entry side price qty ()
+  end
 end
