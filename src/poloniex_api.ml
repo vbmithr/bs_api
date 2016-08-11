@@ -142,26 +142,34 @@ let book_of_book_raw { rate; typ; amount } =
       Option.value_exn ~message:"no scheme in uri" Uri.(scheme uri) in
     let outbuf = Buffer.create 4096 in
     let write_wamp w msg =
-      let serialized_msg = Wamp_msgpck.msg_to_msgpck msg |> Msgpck.StringBuf.to_string ~outbuf in
+      Buffer.clear outbuf;
+      Buffer.add_bytes outbuf @@ Bytes.create 4;
+      let nb_written = Wamp_msgpck.msg_to_msgpck msg |> Msgpck.StringBuf.write outbuf in
+      let serialized_msg = Buffer.contents outbuf in
+      Binary_packing.pack_unsigned_32_int_big_endian serialized_msg 0 nb_written;
       maybe_debug log "-> %s" (Wamp.sexp_of_msg Msgpck.sexp_of_t msg |> Sexplib.Sexp.to_string);
       Pipe.write w serialized_msg
     in
-    let read_wamp_exn msg =
-      let _nb_read, msg = Msgpck.String.read msg in
+    let read_welcome msg =
+      let _nb_read, msg = Msgpck.String.read ~pos:4 msg in
       maybe_debug log "<- %s" (Msgpck.sexp_of_t msg |> Sexplib.Sexp.to_string);
       Result.ok_or_failwith @@ Wamp_msgpck.msg_of_msgpck msg
     in
     let transfer_f q =
-      return @@ Queue.filter_map q ~f:(fun msg_str ->
-          let _nb_read, msg = Msgpck.String.read msg_str in
+      let res = Queue.create () in
+      let rec read_loop pos msg_str =
+        if pos < String.length msg_str then
+          let nb_read, msg = Msgpck.String.read ~pos:(pos+4) msg_str in
           match Wamp_msgpck.msg_of_msgpck msg with
-          | Ok msg -> Some msg
-          | Error msg -> maybe_error log "%s" msg; None
-        )
+          | Ok msg -> Queue.enqueue res msg; read_loop (pos+4+nb_read) msg_str
+          | Error msg -> maybe_error log "%s" msg
+      in
+      Queue.iter q ~f:(read_loop 0);
+      return res
     in
     let subscribe ~topics r w =
       Deferred.List.map ~how:`Sequential topics ~f:begin fun topic ->
-          let request_id, subscribe_msg = Wamp_msgpck.subscribe topic in
+          let _request_id, subscribe_msg = Wamp_msgpck.subscribe topic in
           write_wamp w subscribe_msg
       end
     in
@@ -174,7 +182,7 @@ let book_of_book_raw { rate; typ; amount } =
       Pipe.read r >>= function
       | `Eof -> raise End_of_file
       | `Ok msg ->
-        begin match read_wamp_exn msg with
+        begin match read_welcome msg with
         | Wamp.Welcome _ ->
           subscribe ~topics r w >>= fun _sub_ids ->
           Pipe.transfer' r client_w transfer_f
@@ -187,7 +195,7 @@ let book_of_book_raw { rate; typ; amount } =
         if scheme = "https" || scheme = "wss" then Conduit_async_ssl.ssl_connect r w
         else return (r, w)
       end >>= fun (r, w) ->
-      let extra_headers = Cohttp.Header.init_with "Sec-Websocket-Protocol" "wamp.2.msgpack" in
+      let extra_headers = Cohttp.Header.init_with "Sec-Websocket-Protocol" "wamp.2.msgpack.batched" in
       let ws_r, ws_w =
         Websocket_async.client_ez ?log:log_ws ~opcode:Binary ~extra_headers ~heartbeat:(sec 25.) uri s r w
       in
