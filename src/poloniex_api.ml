@@ -140,10 +140,9 @@ let book_of_book_raw { rate; typ; amount } =
         Uri_services.(tcp_port_of_uri uri) in
     let scheme =
       Option.value_exn ~message:"no scheme in uri" Uri.(scheme uri) in
-    let buf = BytesLabels.create 4096 in
+    let outbuf = Buffer.create 4096 in
     let write_wamp w msg =
-      let nb_written = Wamp_msgpck.msg_to_msgpck msg |> Msgpck.String.write buf in
-      let serialized_msg = BytesLabels.sub_string buf 0 nb_written in
+      let serialized_msg = Wamp_msgpck.msg_to_msgpck msg |> Msgpck.StringBuf.to_string ~outbuf in
       maybe_debug log "-> %s" (Wamp.sexp_of_msg Msgpck.sexp_of_t msg |> Sexplib.Sexp.to_string);
       Pipe.write w serialized_msg
     in
