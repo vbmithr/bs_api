@@ -80,7 +80,7 @@ let plnx topics =
   let r = PLNX.Ws.open_connection ~log:(Lazy.force log) ~topics () in
   Pipe.transfer r Writer.(pipe @@ Lazy.force stderr) ~f:begin fun msg ->
     msg |> Wamp_msgpck.msg_to_msgpck |> Msgpck.sexp_of_t |> fun msg_str ->
-    Sexplib.Sexp.to_string msg_str ^ "\n"
+    Sexplib.Sexp.to_string_hum msg_str ^ "\n"
   end
 
 let plnx =
