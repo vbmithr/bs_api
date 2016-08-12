@@ -1,6 +1,7 @@
 open Core.Std
 open Async.Std
 
+open Dtc
 open Bs_devkit.Core
 
 let endpoint = Uri.of_string "https://poloniex.com/public"
@@ -17,7 +18,7 @@ type trade_raw = {
 
 let trade_of_trade_raw { date; typ; rate; amount } =
   let date = Time_ns.of_string date in
-  let typ = match typ with "buy" -> Side.Buy | "sell" -> Sell | _ -> invalid_arg "typ_of_string" in
+  let typ = match typ with "buy" -> Dtc.Buy | "sell" -> Sell | _ -> invalid_arg "typ_of_string" in
   let rate = Fn.compose satoshis_int_of_float_exn Float.of_string rate in
   let amount = Fn.compose satoshis_int_of_float_exn Float.of_string amount in
   DB.create_trade date typ rate amount ()
@@ -233,7 +234,7 @@ module Ws = struct
       let rate = String.Map.find_exn msg "rate" |> Msgpck.to_string in
       let amount = String.Map.find_exn msg "amount" |> Msgpck.to_string in
       let date = Time_ns.of_string date in
-      let side = match side with "buy" -> Side.Buy | "sell" -> Sell | _ -> invalid_arg "typ_of_string" in
+      let side = match side with "buy" -> Dtc.Buy | "sell" -> Sell | _ -> invalid_arg "typ_of_string" in
       let rate = Fn.compose satoshis_int_of_float_exn Float.of_string rate in
       let amount = Fn.compose satoshis_int_of_float_exn Float.of_string amount in
       DB.create_trade date side rate amount ()
@@ -244,7 +245,7 @@ module Ws = struct
       let side = String.Map.find_exn msg "type" |> Msgpck.to_string in
       let price = String.Map.find_exn msg "rate" |> Msgpck.to_string in
       let qty = String.Map.find msg "amount" |> Option.map ~f:Msgpck.to_string in
-      let side = match side with "bid" -> Side.Buy | "ask" -> Sell | _ -> invalid_arg "book_of_book_raw" in
+      let side = match side with "bid" -> Dtc.Buy | "ask" -> Sell | _ -> invalid_arg "book_of_book_raw" in
       let price = Fn.compose satoshis_int_of_float_exn Float.of_string price in
       let qty = Option.value_map qty ~default:0 ~f:(Fn.compose satoshis_int_of_float_exn Float.of_string) in
       DB.create_book_entry side price qty ()
@@ -281,7 +282,7 @@ module Ws = struct
     } [@@deriving yojson]
 
     let book_of_book_raw { rate; typ; amount } =
-      let side = match typ with "bid" -> Side.Buy | "ask" -> Sell | _ -> invalid_arg "book_of_book_raw" in
+      let side = match typ with "bid" -> Dtc.Buy | "ask" -> Sell | _ -> invalid_arg "book_of_book_raw" in
       let price = Fn.compose satoshis_int_of_float_exn Float.of_string rate in
       let qty = Option.value_map amount ~default:0 ~f:(Fn.compose satoshis_int_of_float_exn Float.of_string) in
       DB.create_book_entry side price qty ()

@@ -7,14 +7,9 @@ open Bs_devkit.Core
 let exchange = "BITFINEX"
 
 let side_of_amount amount = match Float.sign_exn amount with
-  | Pos -> Bid
-  | Neg -> Ask
-  | Zero -> invalid_arg "side_of_amount"
-
-let buy_or_sell_of_amount amount = match Float.sign_exn amount with
   | Pos -> Buy
   | Neg -> Sell
-  | Zero -> invalid_arg "buy_or_sell_of_amount"
+  | Zero -> invalid_arg "side_of_amount"
 
 module Order = struct
   type exchange_type =
@@ -86,7 +81,7 @@ module Rest = struct
       ts: Time_ns.t;
       price: float;
       qty: float;
-      side: buy_or_sell;
+      side: side;
     } [@@deriving create]
 
     let of_raw { Raw.timestamp; price; amount; typ; _ } =
@@ -167,7 +162,7 @@ module Rest = struct
 
       let submit_exn ?buf ?log ~key ~secret o =
         let open Trading.Order in
-        let side = Option.value_exn ~message:"side is unset" o.Submit.buy_sell in
+        let side = Option.value_exn ~message:"side is unset" o.Submit.side in
         let side = string_of_buy_sell side in
         let typ = string_of_ord_type_tif o.ord_type o.tif in
         let price = if o.ord_type = Some Market then 1. else o.p1 in
@@ -215,7 +210,7 @@ module Rest = struct
           exchange: string;
           price: float;
           avg_execution_price: float;
-          side: buy_or_sell;
+          side: side;
           typ: OrderType.t;
           tif:TimeInForce.t;
           ts: Time_ns.t;
