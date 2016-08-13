@@ -335,19 +335,17 @@ module Ws = struct
       end
       else Pipe.write w msg
     in
-    Option.iter to_ws ~f:(fun to_ws ->
-        don't_wait_for @@
-        Monitor.handle_errors
-          (fun () ->
-             Pipe.iter ~continue_on_error:true to_ws
-               ~f:(fun msg_json ->
-                   let msg_str = Yojson.Safe.to_string msg_json in
-                   maybe_debug log "-> %s" msg_str;
-                   loop_write ws_w_mvar msg_str
-                 )
-          )
-          (fun exn -> maybe_error log "%s" @@ Exn.to_string exn)
-      );
+    Option.iter to_ws ~f:begin fun to_ws ->
+      don't_wait_for @@
+      Monitor.handle_errors begin fun () ->
+        Pipe.iter ~continue_on_error:true to_ws ~f:begin fun msg_json ->
+          let msg_str = Yojson.Safe.to_string msg_json in
+          maybe_debug log "-> %s" msg_str;
+          loop_write ws_w_mvar msg_str
+        end
+      end
+        (fun exn -> maybe_error log "%s" @@ Exn.to_string exn)
+    end;
     let client_r, client_w = Pipe.create () in
     let tcp_fun s r w =
       Socket.(setopt s Opt.nodelay true);
