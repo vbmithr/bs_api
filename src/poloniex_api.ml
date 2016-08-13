@@ -103,7 +103,7 @@ module Ws = struct
     data: 'a;
   } [@@deriving create, yojson]
 
-  let open_connection ?log_ws ?log ~topics () =
+  let open_connection ?log_ws ?log to_ws =
     let uri_str = "https://api.poloniex.com" in
     let uri = Uri.of_string uri_str in
     let host = Option.value_exn ~message:"no host in uri" Uri.(host uri) in
@@ -121,11 +121,26 @@ module Ws = struct
       maybe_debug log "-> %s" (Wamp.sexp_of_msg Msgpck.sexp_of_t msg |> Sexplib.Sexp.to_string);
       Pipe.write w serialized_msg
     in
-    let read_welcome msg =
-      let _nb_read, msg = Msgpck.String.read ~pos:4 msg in
-      maybe_debug log "<- %s" (Msgpck.sexp_of_t msg |> Sexplib.Sexp.to_string);
-      Result.ok_or_failwith @@ Wamp_msgpck.msg_of_msgpck msg
+    let ws_w_mvar = Mvar.create () in
+    let rec loop_write mvar msg =
+      let mvar_ro = Mvar.read_only mvar in
+      Mvar.value_available mvar_ro >>= fun () ->
+      let w = Mvar.peek_exn mvar_ro in
+      if Pipe.is_closed w then begin
+        Mvar.take mvar_ro >>= fun _ ->
+        loop_write mvar msg
+      end
+      else write_wamp w msg
     in
+    don't_wait_for @@
+    Monitor.handle_errors
+      begin fun () ->
+        Pipe.iter ~continue_on_error:true to_ws ~f:begin fun wamp ->
+          maybe_debug log "-> %s" (Wamp.sexp_of_msg Msgpck.sexp_of_t wamp |> Sexplib.Sexp.to_string);
+          loop_write ws_w_mvar wamp
+        end
+      end
+      (fun exn -> maybe_error log "%s" @@ Exn.to_string exn);
     let transfer_f q =
       let res = Queue.create () in
       let rec read_loop pos msg_str =
@@ -138,27 +153,13 @@ module Ws = struct
       Queue.iter q ~f:(read_loop 0);
       return res
     in
-    let subscribe ~topics r w =
-      Deferred.List.map ~how:`Sequential topics ~f:begin fun topic ->
-          let _request_id, subscribe_msg = Wamp_msgpck.subscribe topic in
-          write_wamp w subscribe_msg
-      end
-    in
     let client_r, client_w = Pipe.create () in
     let process_ws r w =
       (* Initialize *)
       maybe_info log "[WS] connected to %s" uri_str;
       let hello = Wamp_msgpck.(hello (Uri.of_string "realm1") [Subscriber]) in
       write_wamp w hello >>= fun () ->
-      Pipe.read r >>= function
-      | `Eof -> raise End_of_file
-      | `Ok msg ->
-        begin match read_welcome msg with
-        | Wamp.Welcome _ ->
-          subscribe ~topics r w >>= fun _sub_ids ->
-          Pipe.transfer' r client_w transfer_f
-        | _ -> failwith "wamp: expected Welcome"
-        end
+      Pipe.transfer' r client_w transfer_f
     in
     let tcp_fun s r w =
       Socket.(setopt s Opt.nodelay true);
@@ -167,9 +168,8 @@ module Ws = struct
         else return (r, w)
       end >>= fun (r, w) ->
       let extra_headers = Cohttp.Header.init_with "Sec-Websocket-Protocol" "wamp.2.msgpack.batched" in
-      let ws_r, ws_w =
-        Websocket_async.client_ez ?log:log_ws ~opcode:Binary ~extra_headers ~heartbeat:(sec 25.) uri s r w
-      in
+      let ws_r, ws_w = Websocket_async.client_ez ?log:log_ws ~opcode:Binary ~extra_headers ~heartbeat:(sec 25.) uri s r w in
+      Mvar.set ws_w_mvar ws_w;
       let cleanup () = Deferred.all_unit [Reader.close r; Writer.close w] in
       Monitor.protect ~name:"process_ws" ~finally:cleanup (fun () -> process_ws ws_r ws_w)
     in
@@ -188,6 +188,14 @@ module Ws = struct
     in
     don't_wait_for @@ loop ();
     client_r
+
+  let subscribe w topics =
+    let topics = List.map topics ~f:Uri.of_string in
+    Deferred.List.map ~how:`Sequential topics ~f:begin fun topic ->
+      let request_id, subscribe_msg = Wamp_msgpck.subscribe topic in
+      Pipe.write w subscribe_msg >>| fun () ->
+      request_id
+    end
 
   module Msgpck = struct
     type nonrec t = Msgpck.t t

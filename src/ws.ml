@@ -76,12 +76,18 @@ let bfx =
   Command.basic ~summary:"Bitfinex WS client" base_spec run
 
 let plnx topics =
-  let topics = List.map topics ~f:Uri.of_string in
-  let r = PLNX.Ws.open_connection ~log:(Lazy.force log) ~topics () in
-  Pipe.transfer r Writer.(pipe @@ Lazy.force stderr) ~f:begin fun msg ->
-    msg |> Wamp_msgpck.msg_to_msgpck |> Msgpck.sexp_of_t |> fun msg_str ->
-    Sexplib.Sexp.to_string_hum msg_str ^ "\n"
-  end
+  let to_ws, to_ws_w = Pipe.create () in
+  let r = PLNX.Ws.open_connection ~log:(Lazy.force log) to_ws in
+  let transfer_f q =
+    Deferred.Queue.filter_map q ~f:begin function
+    | Wamp.Welcome _ -> PLNX.Ws.subscribe to_ws_w topics >>| fun _req_ids -> None
+    | msg ->
+      msg |> Wamp_msgpck.msg_to_msgpck |>
+      Msgpck.sexp_of_t |> fun msg_str ->
+      return @@ Option.some @@ Sexplib.Sexp.to_string_hum msg_str ^ "\n";
+    end
+  in
+  Pipe.transfer' r Writer.(pipe @@ Lazy.force stderr) ~f:transfer_f
 
 let plnx =
   let run cfg loglevel _testnet _md topics =
