@@ -556,11 +556,11 @@ let update_action_of_string = function
   | "delete" -> Delete
   | s -> invalid_argf "update_action_of_bitmex: %s" s ()
 
-let buy_sell_of_bmex = function
+let side_of_bmex = function
   | "Buy" -> Ok Dtc.Buy
   | "Sell" -> Ok Sell
   | s -> Error s
 
-let bmex_of_buy_sell = function
+let bmex_of_side = function
   | Dtc.Buy -> "Buy"
   | Sell -> "Sell"
