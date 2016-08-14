@@ -307,7 +307,7 @@ module Ws = struct
       (if testnet then testnet_uri else uri)
       (if md then "realtimemd" else "realtime")
 
-  let open_connection ?(connected=Mvar.create ()) ?(buf=Bi_outbuf.create 4096) ?to_ws ?(query_params=[]) ?log ?auth ~testnet ~md ~topics () =
+  let open_connection ?connected ?(buf=Bi_outbuf.create 4096) ?to_ws ?(query_params=[]) ?log ?auth ~testnet ~md ~topics () =
     let uri = uri_of_opts testnet md in
     let auth_params = match auth with
       | None -> []
@@ -356,7 +356,7 @@ module Ws = struct
       (if scheme = "https" || scheme = "wss" then Conduit_async_ssl.ssl_connect r w else return (r, w)) >>= fun (r, w) ->
       let ws_r, ws_w = Websocket_async.client_ez ?log ~heartbeat:(sec 25.) uri s r w in
       Mvar.set ws_w_mvar ws_w;
-      Mvar.set connected ();
+      Option.iter connected ~f:(fun c -> Mvar.set c ());
       maybe_info log "[WS] connecting to %s" uri_str;
       Monitor.protect ~finally:(fun () -> cleanup r w ws_r ws_w) (fun () -> Pipe.transfer ws_r client_w ~f:(Yojson.Safe.from_string ~buf))
     in
