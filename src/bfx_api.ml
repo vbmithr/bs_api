@@ -581,7 +581,7 @@ module Ws = struct
     let `Hex authSig = Hash.SHA384.hmac ~key:secret Cstruct.(of_string payload) |> Hex.of_cstruct in
     create_auth ~event:"auth" ~apiKey ~authSig ~authPayload:payload ()
 
-  let open_connection ?auth ?log ?(evts=[]) ?to_ws () =
+  let open_connection ?(buf=Bi_outbuf.create 4096) ?auth ?log ?to_ws () =
     let uri_str = "https://api2.bitfinex.com:3000/ws" in
     let uri = Uri.of_string uri_str in
     let uri_str = Uri.to_string uri in
@@ -591,21 +591,18 @@ module Ws = struct
     in
     let scheme = Option.value_exn ~message:"no scheme in uri" Uri.(scheme uri) in
     let cur_ws_w = ref None in
-    Option.iter to_ws ~f:(fun to_ws ->
-        don't_wait_for @@
-        Monitor.handle_errors
-          (fun () ->
-             Pipe.iter ~continue_on_error:true to_ws
-               ~f:(fun ev ->
-                   let ev_str = (ev |> Ev.to_yojson |> Yojson.Safe.to_string) in
-                   maybe_debug log "-> %s" ev_str;
-                   match !cur_ws_w with
-                   | None -> Deferred.unit
-                   | Some w -> Pipe.write_if_open w ev_str
-                 )
-          )
-          (fun exn -> maybe_error log "%s" @@ Exn.to_string exn)
-      );
+    Option.iter to_ws ~f:begin fun to_ws -> don't_wait_for @@
+      Monitor.handle_errors (fun () ->
+          Pipe.iter ~continue_on_error:true to_ws ~f:begin fun ev ->
+            let ev_str = (ev |> Ev.to_yojson |> Yojson.Safe.to_string) in
+            maybe_debug log "-> %s" ev_str;
+            match !cur_ws_w with
+            | None -> Deferred.unit
+            | Some w -> Pipe.write_if_open w ev_str
+          end
+        )
+        (fun exn -> maybe_error log "%s" @@ Exn.to_string exn)
+    end;
     let client_r, client_w = Pipe.create () in
     let tcp_fun s r w =
       Socket.(setopt s Opt.nodelay true);
@@ -628,13 +625,7 @@ module Ws = struct
         maybe_debug log "-> %s" auth_str;
         Pipe.write ws_w auth_str
       end >>= fun () ->
-      (* SUBS *)
-      Deferred.List.iter evts ~f:(fun ev ->
-          let ev_str = (ev |> Ev.to_yojson |> Yojson.Safe.to_string) in
-          maybe_debug log "-> %s" ev_str;
-          Pipe.write ws_w ev_str
-        ) >>= fun () ->
-      Monitor.protect ~finally:cleanup (fun () -> Pipe.transfer_id ws_r client_w)
+      Monitor.protect ~finally:cleanup (fun () -> Pipe.transfer ws_r client_w ~f:(Yojson.Safe.from_string ~buf))
     in
     let rec loop () = begin
       Monitor.try_with_or_error ~name:"BFX.Ws.with_connection"

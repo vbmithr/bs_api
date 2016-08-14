@@ -26,7 +26,7 @@ let base_spec =
 let bitmex key secret testnet md topics =
   let buf = Bi_outbuf.create 4096 in
   let to_ws = Pipe.map Reader.(stdin |> Lazy.force |> pipe) ~f:(Yojson.Safe.from_string ~buf) in
-  let r = BMEX.Ws.open_connection ~to_ws ~log:Lazy.(force log) ~auth:(key, secret) ~testnet ~topics ~md () in
+  let r = BMEX.Ws.open_connection ~buf ~to_ws ~log:Lazy.(force log) ~auth:(key, secret) ~testnet ~topics ~md () in
   Pipe.transfer r Writer.(pipe @@ Lazy.force stderr) ~f:(fun s -> Yojson.Safe.to_string ~buf s ^ "\n")
 
 let bitmex =
@@ -57,14 +57,23 @@ let kaiko =
   Command.basic ~summary:"Kaiko WS client" base_spec run
 
 let bfx key secret topics =
-  let evts = List.map topics ~f:(fun ts ->
-      match String.split ts ~on:':' with
-      | [topic; symbol] ->
-        BFX.Ws.Ev.create ~name:"subscribe" ~fields:["channel", `String topic; "pair", `String symbol; "prec", `String "R0"] ()
-      | _ -> invalid_arg "topic"
-    ) in
-  let r = BFX.Ws.open_connection ~auth:(key, secret) ~evts () in
-  Pipe.transfer r Writer.(pipe @@ Lazy.force stderr) ~f:(fun s -> s ^ "\n")
+  let evts = List.map topics ~f:begin fun ts -> match String.split ts ~on:':' with
+    | [topic; symbol] ->
+      BFX.Ws.Ev.create ~name:"subscribe" ~fields:["channel", `String topic; "pair", `String symbol; "prec", `String "R0"] ()
+    | _ -> invalid_arg "topic"
+    end
+  in
+  let buf = Bi_outbuf.create 4096 in
+  let to_ws, to_ws_w = Pipe.create () in
+  let r = BFX.Ws.open_connection ~to_ws ~buf ~auth:(key, secret) () in
+  Pipe.transfer' r Writer.(pipe @@ Lazy.force stderr) ~f:begin fun q ->
+    Deferred.Queue.filter_map q ~f:begin function
+    | `Assoc (("event", `String "info") :: _) as s ->
+      don't_wait_for @@ Pipe.(transfer_id (of_list evts) to_ws_w);
+      return @@ Option.some @@ Yojson.Safe.to_string ~buf s ^ "\n"
+    | s -> return @@ Option.some @@ Yojson.Safe.to_string ~buf s ^ "\n"
+    end
+  end
 
 let bfx =
   let run cfg loglevel _testnet _md topics =
@@ -80,7 +89,11 @@ let plnx topics =
   let r = PLNX.Ws.open_connection ~log:(Lazy.force log) to_ws in
   let transfer_f q =
     Deferred.Queue.filter_map q ~f:begin function
-    | Wamp.Welcome _ -> PLNX.Ws.subscribe to_ws_w topics >>| fun _req_ids -> None
+    | Wamp.Welcome _ as msg ->
+      PLNX.Ws.subscribe to_ws_w topics >>| fun _req_ids ->
+      msg |> Wamp_msgpck.msg_to_msgpck |>
+      Msgpck.sexp_of_t |> fun msg_str ->
+      Option.some @@ Sexplib.Sexp.to_string_hum msg_str ^ "\n";
     | msg ->
       msg |> Wamp_msgpck.msg_to_msgpck |>
       Msgpck.sexp_of_t |> fun msg_str ->

@@ -307,7 +307,7 @@ module Ws = struct
       (if testnet then testnet_uri else uri)
       (if md then "realtimemd" else "realtime")
 
-  let open_connection ?(buf=Bi_outbuf.create 4096) ?to_ws ?(query_params=[]) ?log ?auth ~testnet ~md ~topics () =
+  let open_connection ?(connected=Mvar.create ()) ?(buf=Bi_outbuf.create 4096) ?to_ws ?(query_params=[]) ?log ?auth ~testnet ~md ~topics () =
     let uri = uri_of_opts testnet md in
     let auth_params = match auth with
       | None -> []
@@ -347,28 +347,25 @@ module Ws = struct
         (fun exn -> maybe_error log "%s" @@ Exn.to_string exn)
     end;
     let client_r, client_w = Pipe.create () in
+    let cleanup r w ws_r ws_w =
+      Pipe.close_read ws_r;
+      Deferred.all_unit [Reader.close r; Writer.close w]
+    in
     let tcp_fun s r w =
       Socket.(setopt s Opt.nodelay true);
-      begin
-        if scheme = "https" || scheme = "wss" then Conduit_async_ssl.ssl_connect r w
-        else return (r, w)
-      end >>= fun (r, w) ->
+      (if scheme = "https" || scheme = "wss" then Conduit_async_ssl.ssl_connect r w else return (r, w)) >>= fun (r, w) ->
       let ws_r, ws_w = Websocket_async.client_ez ?log ~heartbeat:(sec 25.) uri s r w in
       Mvar.set ws_w_mvar ws_w;
-      let cleanup () =
-        Pipe.close_read ws_r;
-        Deferred.all_unit [Reader.close r; Writer.close w]
-      in
+      Mvar.set connected ();
       maybe_info log "[WS] connecting to %s" uri_str;
-      Monitor.protect ~finally:cleanup (fun () -> Pipe.transfer ws_r client_w ~f:(Yojson.Safe.from_string ~buf))
+      Monitor.protect ~finally:(fun () -> cleanup r w ws_r ws_w) (fun () -> Pipe.transfer ws_r client_w ~f:(Yojson.Safe.from_string ~buf))
     in
-    let rec loop () =
-      begin
-        Monitor.try_with_or_error ~name:"with_connection" (fun () ->
-            Tcp.(with_connection (to_host_and_port host port) tcp_fun)) >>| function
-        | Ok () -> maybe_error log "[WS] connection to %s terminated" uri_str;
-        | Error err -> maybe_error log "[WS] connection to %s raised %s" uri_str (Error.to_string_hum err)
-      end >>= fun () ->
+    let rec loop () = begin
+      Monitor.try_with_or_error ~name:"with_connection" (fun () ->
+          Tcp.(with_connection (to_host_and_port host port) tcp_fun)) >>| function
+      | Ok () -> maybe_error log "[WS] connection to %s terminated" uri_str;
+      | Error err -> maybe_error log "[WS] connection to %s raised %s" uri_str (Error.to_string_hum err)
+    end >>= fun () ->
       if Pipe.is_closed client_r then Deferred.unit
       else begin
         maybe_error log "[WS] restarting connection to %s" uri_str;
