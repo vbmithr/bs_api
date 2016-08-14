@@ -57,6 +57,7 @@ let kaiko =
   Command.basic ~summary:"Kaiko WS client" base_spec run
 
 let bfx key secret topics =
+  let open BFX.Ws in
   let evts = List.map topics ~f:begin fun ts -> match String.split ts ~on:':' with
     | [topic; symbol] ->
       BFX.Ws.Ev.create ~name:"subscribe" ~fields:["channel", `String topic; "pair", `String symbol; "prec", `String "R0"] ()
@@ -65,13 +66,14 @@ let bfx key secret topics =
   in
   let buf = Bi_outbuf.create 4096 in
   let to_ws, to_ws_w = Pipe.create () in
-  let r = BFX.Ws.open_connection ~to_ws ~buf ~auth:(key, secret) () in
+  let r = open_connection ~to_ws ~buf ~auth:(key, secret) () in
   Pipe.transfer' r Writer.(pipe @@ Lazy.force stderr) ~f:begin fun q ->
-    Deferred.Queue.filter_map q ~f:begin function
-    | `Assoc (("event", `String "info") :: _) as s ->
-      don't_wait_for @@ Pipe.(transfer_id (of_list evts) to_ws_w);
+    Deferred.Queue.filter_map q ~f:begin fun s ->
+      Result.iter (Ev.of_yojson s) ~f:begin function
+      | { name = "info" } -> don't_wait_for @@ Pipe.(transfer_id (of_list evts) to_ws_w);
+      | _ -> ()
+      end;
       return @@ Option.some @@ Yojson.Safe.to_string ~buf s ^ "\n"
-    | s -> return @@ Option.some @@ Yojson.Safe.to_string ~buf s ^ "\n"
     end
   end
 

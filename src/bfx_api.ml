@@ -297,12 +297,12 @@ module Ws = struct
     let create ~name ~fields () = { name; fields = String.Map.of_alist_exn fields }
 
     let of_yojson = function
-      | `Assoc fields when List.Assoc.mem fields "event" ->
-        create
-          ~name:List.Assoc.(find_exn fields "event" |> Yojson.Safe.to_basic |> Yojson.Basic.Util.to_string)
-          ~fields:List.Assoc.(remove fields "event")
-          ()
-      | #Yojson.Safe.json -> invalid_arg "Ev.read"
+    | `Assoc fields when List.Assoc.mem fields "event" ->
+      create
+        ~name:List.Assoc.(find_exn fields "event" |> Yojson.Safe.to_basic |> Yojson.Basic.Util.to_string)
+        ~fields:List.Assoc.(remove fields "event")
+        () |> Result.return
+    | #Yojson.Safe.json as s -> Result.failf "%s" @@ Yojson.Safe.to_string s
 
     let to_yojson { name; fields } =
       `Assoc (("event", `String name) :: String.Map.(to_alist fields))
