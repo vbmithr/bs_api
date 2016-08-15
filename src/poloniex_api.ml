@@ -63,25 +63,40 @@ module Rest = struct
         ~isFrozen:(not (isFrozen = "0"))
         ~seq ()
 
-  let trades ?buf ~start ~stop symbol =
+  let trades ?log ?buf ?start ?stop symbol =
     let open Cohttp_async in
-    let start = Time_ns.to_int_ns_since_epoch start / 1_000_000_000 |> Int.to_string in
-    let stop = Time_ns.to_int_ns_since_epoch stop / 1_000_000_000 |> Int.to_string in
-    let url = Uri.add_query_params' endpoint
-        ["command", "returnTradeHistory";
-         "currencyPair", symbol;
-         "start", start;
-         "end", stop;
-        ]
+    let start = Option.map start ~f:(fun start -> Time_ns.to_int_ns_since_epoch start / 1_000_000_000 |> Int.to_string) in
+    let stop = Option.map stop ~f:(fun stop -> Time_ns.to_int_ns_since_epoch stop / 1_000_000_000 |> Int.to_string) in
+    let url = Uri.add_query_params' endpoint @@ List.filter_opt Option.[
+        some ("command", "returnTradeHistory");
+        some ("currencyPair", symbol);
+        map start ~f:(fun start -> "start", start);
+        map stop ~f:(fun stop -> "end", stop);
+      ]
     in
+    maybe_debug log "GET %s" @@ Uri.to_string url;
     Client.get url >>= fun (resp, body) ->
     Body.to_string body >>| fun body_str ->
+    maybe_debug log "<- %s" body_str;
     match Yojson.Safe.from_string ?buf body_str with
     | `List trades ->
       List.map trades ~f:begin fun json ->
         trade_raw_of_yojson json |> Result.ok_or_failwith |> trade_of_trade_raw
       end
     | #Yojson.Safe.json -> invalid_arg body_str
+
+  let all_trades ?log ?start ?(buf=Bi_outbuf.create 4096) symbol =
+    let r, w = Pipe.create () in
+    let start = Option.value ~default:Time_ns.(sub (now ()) @@ Span.of_day 364.) start in
+    let rec inner start =
+      trades ?log ~buf ~start symbol >>= function
+      | [] -> Pipe.close w; Deferred.unit
+      | h :: t as ts ->
+        Deferred.List.iter ts ~how:`Sequential ~f:(fun e -> Pipe.write w e) >>= fun () ->
+        inner Time_ns.(add h.DB.ts @@ Span.of_int_sec 1)
+    in
+    don't_wait_for @@ inner start;
+    r
 
   type currency = {
     id: int;
