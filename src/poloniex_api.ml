@@ -82,6 +82,28 @@ module Rest = struct
         trade_raw_of_yojson json |> Result.ok_or_failwith |> trade_of_trade_raw
       end
     | #Yojson.Safe.json -> invalid_arg body_str
+
+  type currency = {
+    id: int;
+    name: string;
+    txFee: string;
+    minConf: int;
+    depositAddress: string option;
+    disabled: int;
+    delisted: int;
+    frozen: int;
+  } [@@deriving yojson]
+
+  let currencies ?buf () =
+    let url = Uri.add_query_params' endpoint ["command", "returnCurrencies"] in
+    Client.get url >>= fun (resp, body) ->
+    Body.to_string body >>| fun body_str ->
+    match Yojson.Safe.from_string ?buf body_str with
+    | `Assoc currs ->
+      List.map currs ~f:begin fun (code, obj) ->
+        code, currency_of_yojson obj |> Result.ok_or_failwith
+      end
+    | #Yojson.Safe.json -> invalid_arg "currencies"
 end
 
 module Ws = struct
