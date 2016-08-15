@@ -17,7 +17,7 @@ type trade_raw = {
 } [@@deriving create,yojson]
 
 let trade_of_trade_raw { date; typ; rate; amount } =
-  let date = Time_ns.of_string date in
+  let date = Time_ns.of_string (date ^ "Z") in
   let typ = match typ with "buy" -> Dtc.Buy | "sell" -> Sell | _ -> invalid_arg "typ_of_string" in
   let rate = Fn.compose satoshis_int_of_float_exn Float.of_string rate in
   let amount = Fn.compose satoshis_int_of_float_exn Float.of_string amount in
