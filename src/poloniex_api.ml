@@ -77,7 +77,6 @@ module Rest = struct
     maybe_debug log "GET %s" @@ Uri.to_string url;
     Client.get url >>= fun (resp, body) ->
     Body.to_string body >>| fun body_str ->
-    maybe_debug log "<- %s" body_str;
     match Yojson.Safe.from_string ?buf body_str with
     | `List trades ->
       List.map trades ~f:begin fun json ->
