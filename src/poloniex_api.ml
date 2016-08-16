@@ -171,13 +171,9 @@ module Ws = struct
       else write_wamp w msg
     in
     don't_wait_for @@
-    Monitor.handle_errors
-      begin fun () ->
-        Pipe.iter ~continue_on_error:true to_ws ~f:begin fun wamp ->
-          maybe_debug log "-> %s" (Wamp.sexp_of_msg Msgpck.sexp_of_t wamp |> Sexplib.Sexp.to_string);
-          loop_write ws_w_mvar wamp
-        end
-      end
+    Monitor.handle_errors begin fun () ->
+      Pipe.iter ~continue_on_error:true to_ws ~f:(loop_write ws_w_mvar)
+    end
       (fun exn -> maybe_error log "%s" @@ Exn.to_string exn);
     let transfer_f q =
       let res = Queue.create () in
