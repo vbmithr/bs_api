@@ -85,7 +85,7 @@ module Rest = struct
       end
     | #Yojson.Safe.json -> invalid_arg body_str
 
-  let all_trades ?log ?start ?(buf=Bi_outbuf.create 4096) symbol =
+  let all_trades ?(wait=Time_ns.Span.min_value) ?log ?start ?(buf=Bi_outbuf.create 4096) symbol =
     let r, w = Pipe.create () in
     let start = Option.value ~default:Time_ns.(sub (now ()) @@ Span.of_day 364.) start in
     let rec inner start =
@@ -93,6 +93,7 @@ module Rest = struct
       | [] -> Pipe.close w; Deferred.unit
       | h :: t as ts ->
         Deferred.List.iter ts ~how:`Sequential ~f:(fun e -> Pipe.write w e) >>= fun () ->
+        Clock_ns.after wait >>= fun () ->
         inner Time_ns.(add h.DB.ts @@ Span.of_int_sec 1)
     in
     don't_wait_for @@ inner start;
