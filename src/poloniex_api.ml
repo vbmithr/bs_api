@@ -4,8 +4,6 @@ open Async.Std
 open Dtc
 open Bs_devkit.Core
 
-let endpoint = Uri.of_string "https://poloniex.com/public"
-
 type trade_raw = {
   globalTradeID: (Yojson.Safe.json [@default `Null]);
   tradeID: (Yojson.Safe.json [@default `Null]);
@@ -25,6 +23,8 @@ let trade_of_trade_raw { date; typ; rate; amount } =
 
 module Rest = struct
   open Cohttp_async
+
+  let base_uri = Uri.of_string "https://poloniex.com/public"
 
   let bids_asks_of_yojson side records =
     List.map records ~f:(function
@@ -47,7 +47,7 @@ module Rest = struct
   } [@@deriving create]
 
   let orderbook ?log ?(depth=100) symbol =
-    let url = Uri.with_query' endpoint
+    let url = Uri.with_query' base_uri
         ["command", "returnOrderBook"; "currencyPair", symbol; "depth", Int.to_string depth]
     in
     Client.get url >>= fun (resp, body) ->
@@ -67,7 +67,7 @@ module Rest = struct
     let open Cohttp_async in
     let start = Option.map start ~f:(fun start -> Time_ns.to_int_ns_since_epoch start / 1_000_000_000 |> Int.to_string) in
     let stop = Option.map stop ~f:(fun stop -> Time_ns.to_int_ns_since_epoch stop / 1_000_000_000 |> Int.to_string) in
-    let url = Uri.add_query_params' endpoint @@ List.filter_opt Option.[
+    let url = Uri.add_query_params' base_uri @@ List.filter_opt Option.[
         some ("command", "returnTradeHistory");
         some ("currencyPair", symbol);
         map start ~f:(fun start -> "start", start);
@@ -110,7 +110,7 @@ module Rest = struct
   } [@@deriving yojson]
 
   let currencies ?buf () =
-    let url = Uri.add_query_params' endpoint ["command", "returnCurrencies"] in
+    let url = Uri.add_query_params' base_uri ["command", "returnCurrencies"] in
     Client.get url >>= fun (resp, body) ->
     Body.to_string body >>| fun body_str ->
     match Yojson.Safe.from_string ?buf body_str with
