@@ -88,9 +88,13 @@ module Rest = struct
     let r, w = Pipe.create () in
     let start = Option.value ~default:Time_ns.(sub (now ()) @@ Span.of_day 364.) start in
     let rec inner start =
-      trades ?log ~buf ~start symbol >>= function
-      | [] -> Pipe.close w; Deferred.unit
-      | h :: t as ts ->
+      Monitor.try_with_or_error (fun () -> trades ?log ~buf ~start symbol) >>= function
+      | Error err ->
+        maybe_error log "%s" @@ Error.to_string_hum err;
+        Clock_ns.after wait >>= fun () ->
+        inner start
+      | Ok [] -> Pipe.close w; Deferred.unit
+      | Ok (h :: t as ts) ->
         Deferred.List.iter ts ~how:`Sequential ~f:(fun e -> Pipe.write w e) >>= fun () ->
         Clock_ns.after wait >>= fun () ->
         inner Time_ns.(add h.DB.ts @@ Span.of_int_sec 1)
