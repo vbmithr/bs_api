@@ -4,6 +4,19 @@ open Async.Std
 open Dtc
 open Bs_devkit.Core
 
+type ticker = {
+  symbol: string;
+  last: float;
+  ask: float;
+  bid: float;
+  pct_change: float;
+  base_volume: float;
+  quote_volume: float;
+  is_frozen: bool;
+  high24h: float;
+  low24h: float;
+} [@@deriving show,create]
+
 type trade_raw = {
   globalTradeID: (Yojson.Safe.json [@default `Null]);
   tradeID: (Yojson.Safe.json [@default `Null]);
@@ -26,6 +39,43 @@ module Rest = struct
 
   let base_uri = Uri.of_string "https://poloniex.com/public"
 
+  type ticker_raw = {
+    id: int;
+    last: string;
+    lowestAsk: string;
+    highestBid: string;
+    percentChange: string;
+    baseVolume: string;
+    quoteVolume: string;
+    isFrozen: string;
+    high24hr: string;
+    low24hr: string;
+  } [@@deriving yojson]
+
+  let tickers ?buf () =
+    let url = Uri.with_query' base_uri ["command", "returnTicker"] in
+    Client.get url >>= fun (resp, body) ->
+    Body.to_string body >>| fun body_str ->
+    match Yojson.Safe.from_string ?buf body_str with
+    | `Assoc tickers ->
+      List.rev_map tickers ~f:begin fun (symbol, t) ->
+        let raw = ticker_raw_of_yojson t |> Result.ok_or_failwith in
+        create_ticker
+          ~symbol
+          ~last:(Float.of_string raw.last)
+          ~ask:(Float.of_string raw.lowestAsk)
+          ~bid:(Float.of_string raw.highestBid)
+          ~pct_change:(Float.of_string raw.percentChange)
+          ~base_volume:(Float.of_string raw.baseVolume)
+          ~quote_volume:(Float.of_string raw.quoteVolume)
+          ~is_frozen:(Int.of_string raw.isFrozen |> Dtc.bool_of_int)
+          ~high24h:(Float.of_string raw.high24hr)
+          ~low24h:(Float.of_string raw.high24hr)
+          ()
+
+      end
+    | #Yojson.Safe.json -> invalid_arg "tickers"
+
   let bids_asks_of_yojson side records =
     List.map records ~f:(function
       | `List [`String price; `Int qty] -> DB.create_book_entry side (Fn.compose satoshis_int_of_float_exn Float.of_string price) (Fn.compose satoshis_int_of_float_exn Float.of_int qty) ()
@@ -46,12 +96,37 @@ module Rest = struct
     seq: int;
   } [@@deriving create]
 
-  let orderbook ?log ?(depth=100) symbol =
-    let url = Uri.with_query' base_uri ["command", "returnOrderBook"; "currencyPair", symbol; "depth", Int.to_string depth] in
+  let books ?buf ?depth () =
+    let url = Uri.with_query' base_uri @@ List.filter_opt [
+        Some ("command", "returnOrderBook");
+        Some ("currencyPair", "all");
+        Option.map depth ~f:(fun lvls -> "depth", Int.to_string lvls);
+      ]
+    in
     Client.get url >>= fun (resp, body) ->
     Body.to_string body >>| fun body_str ->
-    maybe_debug log "%s" body_str;
-    match Yojson.Safe.from_string body_str with
+    match Yojson.Safe.from_string ?buf body_str with
+    | `Assoc books ->
+      List.rev_map books ~f:begin fun (symbol, b) ->
+        book_raw_of_yojson b |> Result.ok_or_failwith |> fun { asks; bids; isFrozen; seq } ->
+        symbol, create_books
+          ~asks:(bids_asks_of_yojson Sell asks)
+          ~bids:(bids_asks_of_yojson Buy bids)
+          ~isFrozen:(not (isFrozen = "0"))
+          ~seq ()
+      end
+    | #Yojson.Safe.json -> invalid_arg "books"
+
+  let orderbook ?buf ?depth symbol =
+    let url = Uri.with_query' base_uri @@ List.filter_opt [
+        Some ("command", "returnOrderBook");
+        Some ("currencyPair", symbol);
+        Option.map depth ~f:(fun lvls -> "depth", Int.to_string lvls);
+      ]
+    in
+    Client.get url >>= fun (resp, body) ->
+    Body.to_string body >>| fun body_str ->
+    match Yojson.Safe.from_string ?buf body_str with
     | `Assoc ["error", `String msg] -> failwith msg
     | #Yojson.Safe.json as json ->
       book_raw_of_yojson json |> Result.ok_or_failwith |> fun { asks; bids; isFrozen; seq } ->
@@ -132,19 +207,6 @@ module Rest = struct
 end
 
 module Ws = struct
-  type ticker = {
-    symbol: string;
-    last: float;
-    ask: float;
-    bid: float;
-    pct_change: float;
-    base_volume: float;
-    quote_volume: float;
-    is_frozen: bool;
-    high24h: float;
-    low24h: float;
-  } [@@deriving show,create]
-
   type 'a t = {
     typ: string [@key "type"];
     data: 'a;
