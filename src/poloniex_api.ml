@@ -138,20 +138,24 @@ module Rest = struct
 
   let trades ?log ?buf ?start ?stop symbol =
     let open Cohttp_async in
-    let start = Option.map start ~f:(fun start -> Time_ns.to_int_ns_since_epoch start / 1_000_000_000 |> Int.to_string) in
-    let stop = Option.map stop ~f:(fun stop -> Time_ns.to_int_ns_since_epoch stop / 1_000_000_000 |> Int.to_string) in
+    let start_sec = Option.map start ~f:(fun start -> Time_ns.to_int_ns_since_epoch start / 1_000_000_000 |> Int.to_string) in
+    let stop_sec = Option.map stop ~f:(fun stop -> Time_ns.to_int_ns_since_epoch stop / 1_000_000_000 |> Int.to_string) in
     let url = Uri.add_query_params' base_uri @@ List.filter_opt Option.[
         some ("command", "returnTradeHistory");
         some ("currencyPair", symbol);
-        map start ~f:(fun start -> "start", start);
-        map stop ~f:(fun stop -> "end", stop);
+        map start_sec ~f:(fun t -> "start", t);
+        map stop_sec ~f:(fun t -> "end", t);
       ]
     in
-    maybe_debug log "GET %s" @@ Uri.to_string url;
     Client.get url >>= fun (resp, body) ->
     Body.to_string body >>| fun body_str ->
     match Yojson.Safe.from_string ?buf body_str with
     | `List trades ->
+      maybe_debug log "<- trades %s %s %s (%d trades)"
+        symbol
+        (Option.sexp_of_t Time_ns.sexp_of_t start |> Sexplib.Sexp.to_string)
+        (Option.sexp_of_t Time_ns.sexp_of_t stop |> Sexplib.Sexp.to_string)
+        (List.length trades);
       List.map trades ~f:begin fun json ->
         trade_raw_of_yojson json |> Result.ok_or_failwith |> trade_of_trade_raw
       end
