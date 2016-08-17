@@ -19,7 +19,7 @@ type ticker = {
 
 type trade_raw = {
   globalTradeID: (Yojson.Safe.json [@default `Null]);
-  tradeID: (Yojson.Safe.json [@default `Null]);
+  tradeID: int;
   date: string;
   typ: string [@key "type"];
   rate: string;
@@ -27,8 +27,8 @@ type trade_raw = {
   total: string;
 } [@@deriving create,yojson]
 
-let trade_of_trade_raw { date; typ; rate; amount } =
-  let date = Time_ns.of_string (date ^ "Z") in
+let trade_of_trade_raw { tradeID; date; typ; rate; amount } =
+  let date = Time_ns.(add (of_string (date ^ "Z")) (Span.of_int_ns tradeID)) in
   let typ = match typ with "buy" -> Dtc.Buy | "sell" -> Sell | _ -> invalid_arg "typ_of_string" in
   let rate = Fn.compose satoshis_int_of_float_exn Float.of_string rate in
   let amount = Fn.compose satoshis_int_of_float_exn Float.of_string amount in
@@ -342,11 +342,12 @@ module Ws = struct
 
     let trade_of_msgpck msg = try
       let msg = map_of_msgpck msg in
+      let tradeID = String.Map.find_exn msg "tradeID" |> Msgpck.to_int in
       let date = String.Map.find_exn msg "date" |> Msgpck.to_string in
       let side = String.Map.find_exn msg "type" |> Msgpck.to_string in
       let rate = String.Map.find_exn msg "rate" |> Msgpck.to_string in
       let amount = String.Map.find_exn msg "amount" |> Msgpck.to_string in
-      let date = Time_ns.of_string date in
+      let date = Time_ns.(add (of_string (date ^ "Z")) @@ Span.of_int_ns tradeID) in
       let side = match side with "buy" -> Dtc.Buy | "sell" -> Sell | _ -> invalid_arg "typ_of_string" in
       let rate = Fn.compose satoshis_int_of_float_exn Float.of_string rate in
       let amount = Fn.compose satoshis_int_of_float_exn Float.of_string amount in
