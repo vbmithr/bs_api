@@ -156,30 +156,33 @@ module Rest = struct
         (Option.sexp_of_t Time_ns.sexp_of_t start |> Sexplib.Sexp.to_string)
         (Option.sexp_of_t Time_ns.sexp_of_t stop |> Sexplib.Sexp.to_string)
         (List.length trades);
-      List.map trades ~f:begin fun json ->
+      List.rev_map trades ~f:begin fun json ->
         trade_raw_of_yojson json |> Result.ok_or_failwith |> trade_of_trade_raw
       end
     | #Yojson.Safe.json -> invalid_arg body_str
 
-  let all_trades ?(wait=Time_ns.Span.min_value) ?log ~start ~span ?(buf=Bi_outbuf.create 4096) symbol =
+  let all_trades
+      ?log
+      ?(wait=Time_ns.Span.min_value)
+      ?(from=Time_ns.now ())
+      ?(down_to=Time_ns.epoch)
+      ?(buf=Bi_outbuf.create 4096)
+      symbol =
     let r, w = Pipe.create () in
-    let rec inner start =
-      let stop = Time_ns.add start span in
-      Monitor.try_with_or_error (fun () -> trades ?log ~buf ~start ~stop symbol) >>= function
+    let rec inner from =
+      Monitor.try_with_or_error (fun () -> trades ?log ~buf ~stop:from symbol) >>= function
       | Error err ->
         maybe_error log "%s" @@ Error.to_string_hum err;
         Clock_ns.after wait >>= fun () ->
-        inner start
-      | Ok [] when Time_ns.(stop > now ()) -> Pipe.close w; Deferred.unit
-      | Ok [] ->
-        Clock_ns.after wait >>= fun () ->
-        inner stop
+        inner from
+      | Ok [] -> Pipe.close w; Deferred.unit
       | Ok (h :: t as ts) ->
         Deferred.List.iter ts ~how:`Sequential ~f:(fun e -> Pipe.write w e) >>= fun () ->
         Clock_ns.after wait >>= fun () ->
-        inner Time_ns.(add h.DB.ts @@ Span.of_int_sec 1)
+        if h.DB.ts < down_to then (Pipe.close w; Deferred.unit)
+        else inner Time_ns.(sub h.DB.ts @@ Span.of_int_sec 1)
     in
-    don't_wait_for @@ inner start;
+    don't_wait_for @@ inner from;
     r
 
   type currency = {

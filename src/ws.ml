@@ -112,9 +112,9 @@ let plnx =
   in
   Command.basic ~summary:"Poloniex WS client" base_spec run
 
-let plnx_trades ~start ~span currency =
+let plnx_trades currency =
   let open PLNX in
-  let r = Rest.all_trades ~log:(Lazy.force log) ~start ~span currency in
+  let r = Rest.all_trades ~log:(Lazy.force log) currency in
   let transfer_f t = DB.sexp_of_trade t |> Sexplib.Sexp.to_string |> fun s -> s ^ "\n" in
   Pipe.transfer r Writer.(pipe @@ Lazy.force stderr) ~f:transfer_f >>= fun () ->
   Shutdown.exit 0
@@ -123,11 +123,8 @@ let plnx_trades =
   let run cfg loglevel _testnet _md topics =
     Option.iter loglevel ~f:(Fn.compose set_level loglevel_of_int);
     begin match topics with
-    | [currency; backspan; span] ->
-      let start = Time_ns.(sub (now ()) (Span.of_string backspan)) in
-      let span = Time_ns.Span.of_string span in
-      don't_wait_for @@ plnx_trades ~start ~span currency;
-    | _ -> invalid_arg "topics"
+    | [] -> invalid_arg "topics"
+    | currency :: _ -> don't_wait_for @@ plnx_trades currency;
     end;
     never_returns @@ Scheduler.go ()
   in
