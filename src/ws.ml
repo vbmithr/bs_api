@@ -92,7 +92,7 @@ let plnx topics =
   let transfer_f q =
     Deferred.Queue.filter_map q ~f:begin function
     | Wamp.Welcome _ as msg ->
-      PLNX.Ws.subscribe to_ws_w topics >>| fun _req_ids ->
+      PLNX.Ws.Msgpck.subscribe to_ws_w topics >>| fun _req_ids ->
       msg |> Wamp_msgpck.msg_to_msgpck |>
       Msgpck.sexp_of_t |> fun msg_str ->
       Option.some @@ Sexplib.Sexp.to_string_hum msg_str ^ "\n";

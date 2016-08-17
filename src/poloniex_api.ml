@@ -294,16 +294,16 @@ module Ws = struct
     don't_wait_for @@ loop ();
     client_r
 
-  let subscribe w topics =
+  module Msgpck = struct
+    type nonrec t = Msgpck.t t
+
+    let subscribe w topics =
     let topics = List.map topics ~f:Uri.of_string in
     Deferred.List.map ~how:`Sequential topics ~f:begin fun topic ->
       let request_id, subscribe_msg = Wamp_msgpck.subscribe topic in
       Pipe.write w subscribe_msg >>| fun () ->
       request_id
     end
-
-  module Msgpck = struct
-    type nonrec t = Msgpck.t t
 
     let map_of_msgpck = function
     | Msgpck.Map elts ->
