@@ -47,9 +47,7 @@ module Rest = struct
   } [@@deriving create]
 
   let orderbook ?log ?(depth=100) symbol =
-    let url = Uri.with_query' base_uri
-        ["command", "returnOrderBook"; "currencyPair", symbol; "depth", Int.to_string depth]
-    in
+    let url = Uri.with_query' base_uri ["command", "returnOrderBook"; "currencyPair", symbol; "depth", Int.to_string depth] in
     Client.get url >>= fun (resp, body) ->
     Body.to_string body >>| fun body_str ->
     maybe_debug log "%s" body_str;
@@ -123,6 +121,14 @@ module Rest = struct
         code, currency_of_yojson obj |> Result.ok_or_failwith
       end
     | #Yojson.Safe.json -> invalid_arg "currencies"
+
+  let symbols ?buf () =
+    let url = Uri.with_query' base_uri ["command", "returnOrderBook"; "currencyPair", "all"; "depth", "0"] in
+    Client.get url >>= fun (resp, body) ->
+    Body.to_string body >>| fun body_str ->
+    match Yojson.Safe.from_string ?buf body_str with
+    | `Assoc syms -> List.rev_map syms ~f:fst
+    | #Yojson.Safe.json -> invalid_arg "symbols"
 end
 
 module Ws = struct
