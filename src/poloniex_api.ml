@@ -342,7 +342,7 @@ module Ws = struct
 
     let trade_of_msgpck msg = try
       let msg = map_of_msgpck msg in
-      let tradeID = String.Map.find_exn msg "tradeID" |> Msgpck.to_int in
+      let tradeID = String.Map.find_exn msg "tradeID" |> Msgpck.to_string |> Int.of_string in
       let date = String.Map.find_exn msg "date" |> Msgpck.to_string in
       let side = String.Map.find_exn msg "type" |> Msgpck.to_string in
       let rate = String.Map.find_exn msg "rate" |> Msgpck.to_string in
