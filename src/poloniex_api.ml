@@ -96,28 +96,7 @@ module Rest = struct
     seq: int;
   } [@@deriving create]
 
-  let books ?buf ?depth () =
-    let url = Uri.with_query' base_uri @@ List.filter_opt [
-        Some ("command", "returnOrderBook");
-        Some ("currencyPair", "all");
-        Option.map depth ~f:(fun lvls -> "depth", Int.to_string lvls);
-      ]
-    in
-    Client.get url >>= fun (resp, body) ->
-    Body.to_string body >>| fun body_str ->
-    match Yojson.Safe.from_string ?buf body_str with
-    | `Assoc books ->
-      List.rev_map books ~f:begin fun (symbol, b) ->
-        book_raw_of_yojson b |> Result.ok_or_failwith |> fun { asks; bids; isFrozen; seq } ->
-        symbol, create_books
-          ~asks:(bids_asks_of_yojson Sell asks)
-          ~bids:(bids_asks_of_yojson Buy bids)
-          ~isFrozen:(not (isFrozen = "0"))
-          ~seq ()
-      end
-    | #Yojson.Safe.json -> invalid_arg "books"
-
-  let orderbook ?buf ?depth symbol =
+  let books ?buf ?depth ?(symbol="all") () =
     let url = Uri.with_query' base_uri @@ List.filter_opt [
         Some ("command", "returnOrderBook");
         Some ("currencyPair", symbol);
@@ -128,13 +107,25 @@ module Rest = struct
     Body.to_string body >>| fun body_str ->
     match Yojson.Safe.from_string ?buf body_str with
     | `Assoc ["error", `String msg] -> failwith msg
-    | #Yojson.Safe.json as json ->
-      book_raw_of_yojson json |> Result.ok_or_failwith |> fun { asks; bids; isFrozen; seq } ->
-      create_books
-        ~asks:(bids_asks_of_yojson Sell asks)
-        ~bids:(bids_asks_of_yojson Buy bids)
-        ~isFrozen:(not (isFrozen = "0"))
-        ~seq ()
+    | `Assoc obj as json -> begin match symbol with
+      | "all" -> List.rev_map obj ~f:begin fun (symbol, b) ->
+          book_raw_of_yojson b |> Result.ok_or_failwith |> fun { asks; bids; isFrozen; seq } ->
+          symbol, create_books
+            ~asks:(bids_asks_of_yojson Sell asks)
+            ~bids:(bids_asks_of_yojson Buy bids)
+            ~isFrozen:(not (isFrozen = "0"))
+            ~seq ()
+        end
+      | _ ->
+        book_raw_of_yojson json |> Result.ok_or_failwith |> fun { asks; bids; isFrozen; seq } ->
+        [symbol, create_books
+           ~asks:(bids_asks_of_yojson Sell asks)
+           ~bids:(bids_asks_of_yojson Buy bids)
+           ~isFrozen:(not (isFrozen = "0"))
+           ~seq ()
+        ]
+      end
+    | #Yojson.Safe.json -> invalid_arg "books"
 
   let trades ?log ?buf ?start ?stop symbol =
     let open Cohttp_async in
