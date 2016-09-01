@@ -238,6 +238,46 @@ module Rest = struct
       | _ -> invalid_arg "balances"
       end
     | #Yojson.Safe.json -> invalid_arg "balances"
+
+  type order_response = {
+    orderNumber: string;
+    resultingTrades: trade_raw list;
+    amountUnfilled: string [@default ""];
+  } [@@deriving yojson]
+
+  let order
+      ?buf
+      ?(tif=Dtc.TimeInForce.Good_till_canceled)
+      ?(post_only=false)
+      ~key ~secret ~side ~symbol ~price ~qty () =
+    let data = List.filter_opt [
+        Some ("command", [match side with Dtc.Buy -> "buy" | Sell -> "sell" ]);
+        Some ("currencyPair", [symbol]);
+        Some ("rate", [Float.to_string @@ price // 100_000_000]);
+        Some ("amount", [Float.to_string @@ qty // 100_000_000]);
+        (match tif with
+        | Fill_or_kill -> Some ("fillOrKill", ["1"])
+        | Immediate_or_cancel -> Some ("immediateOrCancel", ["1"])
+        | _ -> None);
+        (if post_only then Some ("postOnly", ["1"]) else None)
+      ]
+    in
+    let data_str, signature = sign ~secret ~data in
+    let headers = Cohttp.Header.of_list [
+        "content-type", "application/x-www-form-urlencoded";
+        "Key", key;
+        "Sign", signature;
+      ]
+    in
+    Monitor.try_with_or_error begin fun () ->
+      Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+      Body.to_string body >>| fun body_str ->
+      Yojson.Safe.from_string ?buf body_str |> function
+      | `Assoc ["error", `String msg] -> failwith msg
+      | #Yojson.Safe.json as json -> match order_response_of_yojson json with
+      | Ok res -> res
+      | Error _ -> failwith body_str
+    end
 end
 
 module Ws = struct
