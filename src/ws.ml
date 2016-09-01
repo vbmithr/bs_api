@@ -1,4 +1,5 @@
 open Core.Std
+open Core_extended.Std
 open Async.Std
 open Log.Global
 
@@ -86,7 +87,29 @@ let bfx =
   in
   Command.basic ~summary:"Bitfinex WS client" base_spec run
 
-let plnx topics =
+let plnx key secret topics =
+  let open PLNX in
+  let process_user_cmd () =
+    let process s =
+      match String.split s ~on:' ' with
+      | [symbol; side; price; qty] ->
+        let side = match side with "b" -> Dtc.Dtc.Buy | "s" -> Sell | _ -> failwith "side" in
+        let price = Int.of_string price in
+        let qty = Int.of_string qty in
+        Rest.order ~key ~secret ~symbol ~side ~price ~qty () >>| begin function
+        | Ok resp -> info "%s" (Rest.order_response_to_yojson resp |> Yojson.Safe.to_string)
+        | Error err -> error "%s" @@ Error.to_string_hum err
+        end
+      | h::t ->
+        error "Unknown command %s" h; Deferred.unit
+      | [] -> error "Empty command"; Deferred.unit
+    in
+    let rec loop () =
+      In_thread.run Readline.input_line >>= function
+      | Some msg -> process msg >>= loop
+      | None -> Deferred.unit
+    in loop ()
+  in
   let to_ws, to_ws_w = Pipe.create () in
   let r = PLNX.Ws.open_connection ~log:(Lazy.force log) to_ws in
   let transfer_f q =
@@ -102,12 +125,16 @@ let plnx topics =
       return @@ Option.some @@ Sexplib.Sexp.to_string_hum msg_str ^ "\n";
     end
   in
-  Pipe.transfer' r Writer.(pipe @@ Lazy.force stderr) ~f:transfer_f
+  Deferred.all_unit [
+    process_user_cmd ();
+    Pipe.transfer' r Writer.(pipe @@ Lazy.force stderr) ~f:transfer_f
+  ]
 
 let plnx =
   let run cfg loglevel _testnet _md topics =
     Option.iter loglevel ~f:(Fn.compose set_level loglevel_of_int);
-    don't_wait_for @@ plnx topics;
+    let key, secret = find_auth cfg "PLNX" in
+    don't_wait_for @@ plnx key secret topics;
     never_returns @@ Scheduler.go ()
   in
   Command.basic ~summary:"Poloniex WS client" base_spec run

@@ -4,6 +4,7 @@ true : bin_annot, safe_string, package(bytes), warn(-40)
 <test> : include
 
 <*/*>: package(core), \
+       package(core_extended), \
        package(async), \
        package(bs_devkit), \
        package(nocrypto), \

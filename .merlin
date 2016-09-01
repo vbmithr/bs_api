@@ -1,5 +1,6 @@
 PKG bytes
 PKG core
+PKG core_extended
 PKG async
 PKG cohttp.async
 PKG websocket
