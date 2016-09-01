@@ -38,6 +38,7 @@ module Rest = struct
   open Cohttp_async
 
   let base_uri = Uri.of_string "https://poloniex.com/public"
+  let trading_uri = Uri.of_string "https://poloniex.com/tradingApi"
 
   type ticker_raw = {
     id: int;
@@ -205,6 +206,38 @@ module Rest = struct
     match Yojson.Safe.from_string ?buf body_str with
     | `Assoc syms -> List.rev_map syms ~f:fst
     | #Yojson.Safe.json -> invalid_arg "symbols"
+
+  let make_sign () =
+    let bigbuf = Bigstring.create 1024 in
+    let nonce = ref @@ Time_ns.(now () |> to_int_ns_since_epoch) / 1_000_000 in
+    fun ~secret ~data ->
+      let data = ("nonce", [Int.to_string !nonce]) :: data in
+      incr nonce;
+      let data_str = Uri.encoded_of_query data in
+      let prehash = Cstruct.of_string ~allocator:(fun len -> Cstruct.of_bigarray bigbuf ~len) data_str in
+      let `Hex sign = Nocrypto.Hash.SHA512.hmac ~key:secret prehash |> Hex.of_cstruct in
+      data_str, sign
+
+  let sign = make_sign ()
+
+  let balances ?buf ~key ~secret () =
+    let data = ["command", ["returnBalances"]] in
+    let data_str, signature = sign ~secret ~data in
+    let headers = Cohttp.Header.of_list [
+        "content-type", "application/x-www-form-urlencoded";
+        "Key", key;
+        "Sign", signature;
+      ]
+    in
+    Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+    Body.to_string body >>| fun body_str ->
+    match Yojson.Safe.from_string ?buf body_str with
+    | `Assoc balances ->
+      List.rev_map balances ~f:begin function
+      | curr, `String qty -> curr, Float.of_string qty
+      | _ -> invalid_arg "balances"
+      end
+    | #Yojson.Safe.json -> invalid_arg "balances"
 end
 
 module Ws = struct
