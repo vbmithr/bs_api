@@ -304,20 +304,21 @@ module Ws = struct
       maybe_debug log "-> %s" (Wamp.sexp_of_msg Msgpck.sexp_of_t msg |> Sexplib.Sexp.to_string);
       Pipe.write w serialized_msg
     in
-    let ws_w_mvar = Mvar.create () in
     let rec loop_write mvar msg =
-      let mvar_ro = Mvar.read_only mvar in
-      Mvar.value_available mvar_ro >>= fun () ->
-      let w = Mvar.peek_exn mvar_ro in
+      Mvar.value_available mvar >>= fun () ->
+      let w = Mvar.peek_exn mvar in
       if Pipe.is_closed w then begin
-        Mvar.take mvar_ro >>= fun _ ->
+        maybe_error log "loop_write: Pipe to websocket closed";
+        Mvar.take mvar >>= fun _ ->
         loop_write mvar msg
       end
       else write_wamp w msg
     in
+    let ws_w_mvar = Mvar.create () in
+    let ws_w_mvar_ro = Mvar.read_only ws_w_mvar in
     don't_wait_for @@
     Monitor.handle_errors begin fun () ->
-      Pipe.iter ~continue_on_error:true to_ws ~f:(loop_write ws_w_mvar)
+      Pipe.iter ~continue_on_error:true to_ws ~f:(loop_write ws_w_mvar_ro)
     end
       (fun exn -> maybe_error log "%s" @@ Exn.to_string exn);
     let transfer_f q =
