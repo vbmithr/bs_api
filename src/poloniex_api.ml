@@ -348,7 +348,12 @@ module Ws = struct
         else return (r, w)
       end >>= fun (r, w) ->
       let extra_headers = Cohttp.Header.init_with "Sec-Websocket-Protocol" "wamp.2.msgpack.batched" in
-      let ws_r, ws_w = Websocket_async.client_ez ?log:log_ws ~opcode:Binary ~extra_headers ~heartbeat:(sec 25.) uri s r w in
+      let ws_r, ws_w = Websocket_async.client_ez ?log:log_ws
+          ~opcode:Binary ~extra_headers
+          ~heartbeat:(Time_ns.Span.of_int_sec 25)
+          ~wait_for_pong:(Time_ns.Span.of_int_sec 10)
+          uri s r w
+      in
       Mvar.set ws_w_mvar ws_w;
       let cleanup () = Deferred.all_unit [Reader.close r; Writer.close w] in
       Monitor.protect ~name:"process_ws" ~finally:cleanup (fun () -> process_ws ws_r ws_w)

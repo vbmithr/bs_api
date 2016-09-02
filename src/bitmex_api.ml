@@ -354,7 +354,7 @@ module Ws = struct
     let tcp_fun s r w =
       Socket.(setopt s Opt.nodelay true);
       (if scheme = "https" || scheme = "wss" then Conduit_async_ssl.ssl_connect r w else return (r, w)) >>= fun (r, w) ->
-      let ws_r, ws_w = Websocket_async.client_ez ?log ~heartbeat:(sec 25.) uri s r w in
+      let ws_r, ws_w = Websocket_async.client_ez ?log ~heartbeat:(Time_ns.Span.of_int_sec 25) uri s r w in
       Mvar.set ws_w_mvar ws_w;
       Option.iter connected ~f:(fun c -> Mvar.set c ());
       maybe_info log "[WS] connecting to %s" uri_str;
@@ -424,7 +424,7 @@ module Ws = struct
           if scheme = "https" || scheme = "wss" then Conduit_async_ssl.ssl_connect r w
           else return (r, w)
         end >>= fun (r, w) ->
-        let ws_r, ws_w = Websocket_async.client_ez ?log ~heartbeat:(sec 25.) uri s r w in
+        let ws_r, ws_w = Websocket_async.client_ez ?log ~heartbeat:(Time_ns.Span.of_int_sec 25) uri s r w in
         let cleanup () =
           Pipe.close_read ws_r;
           Deferred.all_unit [Reader.close r; Writer.close w]
