@@ -286,7 +286,7 @@ module Ws = struct
     data: 'a;
   } [@@deriving create, yojson]
 
-  let open_connection ?heartbeat ?wait_for_pong ?log_ws ?log to_ws =
+  let open_connection ?(heartbeat=Time_ns.Span.of_int_sec 25) ?wait_for_pong ?log_ws ?log to_ws =
     let uri_str = "https://api.poloniex.com" in
     let uri = Uri.of_string uri_str in
     let host = Option.value_exn ~message:"no host in uri" Uri.(host uri) in
@@ -349,7 +349,7 @@ module Ws = struct
       end >>= fun (r, w) ->
       let extra_headers = Cohttp.Header.init_with "Sec-Websocket-Protocol" "wamp.2.msgpack.batched" in
       let ws_r, ws_w = Websocket_async.client_ez ?log:log_ws
-          ~opcode:Binary ~extra_headers ?heartbeat ?wait_for_pong uri s r w
+          ~opcode:Binary ~extra_headers ~heartbeat ?wait_for_pong uri s r w
       in
       Mvar.set ws_w_mvar ws_w;
       let cleanup () = Deferred.all_unit [Reader.close r; Writer.close w] in
