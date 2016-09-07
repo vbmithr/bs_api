@@ -84,7 +84,9 @@ module Quote = struct
 end
 
 module Crypto = struct
-  let gen_nonce () = Time_ns.(now () |> to_int_ns_since_epoch) / 1_000_000
+  let gen_nonce = function
+  | `Rest -> Time_ns.(now () |> to_int_ns_since_epoch) / 1_000_000_000 + 5
+  | `Ws -> Time_ns.(now () |> to_int_ns_since_epoch) / 1_000_000
 
   let sign ?log ?(data="") ~secret ~verb ~endp kind =
     let verb_str = match verb with
@@ -93,7 +95,7 @@ module Crypto = struct
       | `PUT -> "PUT"
       | `DELETE -> "DELETE"
     in
-    let nonce = gen_nonce () in
+    let nonce = gen_nonce kind in
     let nonce_str = Int.to_string nonce in
     maybe_debug log "sign %s" nonce_str;
     let prehash = verb_str ^ endp ^ nonce_str ^ data in
