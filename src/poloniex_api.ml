@@ -271,6 +271,57 @@ module Rest = struct
       | Ok res -> res
       | Error _ -> failwith body_str
     end
+
+  type open_orders_resp_raw = {
+    orderNumber: string;
+    typ: string [@key "type"];
+    rate: string;
+    startingAmount: string;
+    amount: string;
+    total: string;
+    date: string;
+    margin: int;
+  } [@@deriving yojson]
+
+  type open_orders_resp = {
+    id: int;
+    ts: Time_ns.t;
+    side: Dtc.side;
+    price: int;
+    starting_qty: int;
+    qty: int;
+    margin: int;
+  } [@@deriving create, sexp]
+
+  let oo_of_oo_raw oo_raw =
+    let id = Int.of_string oo_raw.orderNumber in
+    let side = match oo_raw.typ with "buy" -> Dtc.Buy | "sell" -> Sell | _ -> invalid_arg "side_of_string" in
+    let price = satoshis_int_of_float_exn @@ Float.of_string oo_raw.rate in
+    let qty = satoshis_int_of_float_exn @@ Float.of_string oo_raw.amount in
+    let starting_qty = satoshis_int_of_float_exn @@ Float.of_string oo_raw.startingAmount in
+    let ts = Time_ns.of_string (oo_raw.date ^ "Z") in
+    let margin = oo_raw.margin in
+    create_open_orders_resp ~id ~ts ~side ~price ~qty ~starting_qty ~margin ()
+
+  let open_orders ?buf ?(symbol="all") ~key ~secret () =
+    let data = [
+      "command", ["returnOpenOrders"];
+      "currencyPair", [symbol];
+    ]
+    in
+    let data_str, headers = sign ~key ~secret ~data in
+    let map_f oo = oo |> open_orders_resp_raw_of_yojson |> Result.ok_or_failwith |> oo_of_oo_raw in
+    Monitor.try_with_or_error begin fun () ->
+      Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+      Body.to_string body >>| fun body_str ->
+      Yojson.Safe.from_string ?buf body_str |> function
+      | `Assoc ["error", `String msg] -> failwith msg
+      | `List oos ->
+        [symbol, List.map oos ~f:map_f]
+      | `Assoc oo_assoc ->
+        List.Assoc.map oo_assoc ~f:(function `List oos -> List.map oos ~f:map_f | #Yojson.Safe.json -> failwith body_str)
+      | #Yojson.Safe.json -> failwith body_str
+    end
 end
 
 module Ws = struct

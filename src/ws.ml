@@ -92,6 +92,12 @@ let plnx key secret topics =
   let process_user_cmd () =
     let process s =
       match String.split s ~on:' ' with
+      | ["oos"; symbol] ->
+        Rest.open_orders ~symbol ~key ~secret () >>| begin function
+        | Ok resp ->
+          List.iter resp ~f:(fun (s, oos) -> info "%s: %s" s (Sexplib.Std.sexp_of_list Rest.sexp_of_open_orders_resp oos |> Sexplib.Sexp.to_string))
+        | Error err -> error "%s" @@ Error.to_string_hum err
+        end
       | [symbol; side; price; qty] ->
         let side = match side with "b" -> Dtc.Dtc.Buy | "s" -> Sell | _ -> failwith "side" in
         let price = Int.of_string price in
