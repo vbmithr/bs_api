@@ -293,9 +293,14 @@ module Rest = struct
     margin: int;
   } [@@deriving create, sexp]
 
+  let side_of_string = function
+  | "buy" -> Dtc.Buy
+  | "sell" -> Sell
+  | _ -> invalid_arg "side_of_string"
+
   let oo_of_oo_raw oo_raw =
     let id = Int.of_string oo_raw.orderNumber in
-    let side = match oo_raw.typ with "buy" -> Dtc.Buy | "sell" -> Sell | _ -> invalid_arg "side_of_string" in
+    let side = side_of_string oo_raw.typ in
     let price = satoshis_int_of_float_exn @@ Float.of_string oo_raw.rate in
     let qty = satoshis_int_of_float_exn @@ Float.of_string oo_raw.amount in
     let starting_qty = satoshis_int_of_float_exn @@ Float.of_string oo_raw.startingAmount in
@@ -318,6 +323,72 @@ module Rest = struct
       | `Assoc ["error", `String msg] -> failwith msg
       | `List oos ->
         [symbol, List.map oos ~f:map_f]
+      | `Assoc oo_assoc ->
+        List.Assoc.map oo_assoc ~f:(function `List oos -> List.map oos ~f:map_f | #Yojson.Safe.json -> failwith body_str)
+      | #Yojson.Safe.json -> failwith body_str
+    end
+
+  type trade_history_raw = {
+    globalTradeID: int;
+    tradeID: string;
+    date: string;
+    rate: string;
+    amount: string;
+    total: string;
+    fee: string;
+    orderNumber: string;
+    typ: string [@key "type"];
+    category: string;
+  } [@@deriving yojson]
+
+  type trade_category = Exchange | Margin | Settlement [@@deriving sexp]
+  let trade_category_of_string = function
+  | "exchange" -> Exchange
+  | "marginTrade" -> Margin
+  | "settlement" -> Settlement
+  | s -> invalid_argf "trade_category_of_string: %s" s ()
+
+  type trade_history = {
+    gid: int;
+    id: int;
+    ts: Time_ns.t;
+    price: int;
+    qty: int;
+    fee: int;
+    order_id: int;
+    side: Dtc.side;
+    category: trade_category
+  } [@@deriving create, sexp]
+
+  let trade_history_of_raw { globalTradeID; tradeID; date; rate; amount; total; fee; orderNumber;
+                             typ; category } =
+    let id = Int.of_string tradeID in
+    let ts = Time_ns.of_string @@ date ^ "Z" in
+    let price = satoshis_int_of_float_exn @@ Float.of_string rate in
+    let qty = satoshis_int_of_float_exn @@ Float.of_string amount in
+    let fee = satoshis_int_of_float_exn @@ Float.of_string fee in
+    let order_id = Int.of_string orderNumber in
+    let side = side_of_string typ in
+    let category = trade_category_of_string category in
+    create_trade_history ~gid:globalTradeID ~id ~ts ~price ~qty ~fee ~order_id ~side ~category ()
+
+  let trade_history ?buf ?(symbol="all") ?start ?stop ~key ~secret () =
+    let data = List.filter_opt [
+        Some ("command", ["returnTradeHistory"]);
+        Some ("currencyPair", [symbol]);
+        Option.map start ~f:(fun ts -> "start", [Int.to_string @@ Time_ns.to_int_ns_since_epoch ts / 1_000_000_000]);
+        Option.map stop ~f:(fun ts -> "end", [Int.to_string @@ Time_ns.to_int_ns_since_epoch ts / 1_000_000_000]);
+    ]
+    in
+    let data_str, headers = sign ~key ~secret ~data in
+    let map_f oo = oo |> trade_history_raw_of_yojson |> Result.ok_or_failwith |> trade_history_of_raw in
+    Monitor.try_with_or_error begin fun () ->
+      Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+      Body.to_string body >>| fun body_str ->
+      Yojson.Safe.from_string ?buf body_str |> function
+      | `Assoc ["error", `String msg] -> failwith msg
+      | `List ths ->
+        [symbol, List.map ths ~f:map_f]
       | `Assoc oo_assoc ->
         List.Assoc.map oo_assoc ~f:(function `List oos -> List.map oos ~f:map_f | #Yojson.Safe.json -> failwith body_str)
       | #Yojson.Safe.json -> failwith body_str

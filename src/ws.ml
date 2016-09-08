@@ -98,6 +98,12 @@ let plnx key secret topics =
           List.iter resp ~f:(fun (s, oos) -> info "%s: %s" s (Sexplib.Std.sexp_of_list Rest.sexp_of_open_orders_resp oos |> Sexplib.Sexp.to_string))
         | Error err -> error "%s" @@ Error.to_string_hum err
         end
+      | ["th"; symbol] ->
+        Rest.trade_history ~symbol ~key ~secret () >>| begin function
+        | Ok resp ->
+          List.iter resp ~f:(fun (s, ths) -> info "%s: %s" s (Sexplib.Std.sexp_of_list Rest.sexp_of_trade_history ths |> Sexplib.Sexp.to_string))
+        | Error err -> error "%s" @@ Error.to_string_hum err
+        end
       | [symbol; side; price; qty] ->
         let side = match side with "b" -> Dtc.Dtc.Buy | "s" -> Sell | _ -> failwith "side" in
         let price = Int.of_string price in
