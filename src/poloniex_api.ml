@@ -210,25 +210,24 @@ module Rest = struct
   let make_sign () =
     let bigbuf = Bigstring.create 1024 in
     let nonce = ref @@ Time_ns.(now () |> to_int_ns_since_epoch) / 1_000_000 in
-    fun ~secret ~data ->
+    fun ~key ~secret ~data ->
       let data = ("nonce", [Int.to_string !nonce]) :: data in
       incr nonce;
       let data_str = Uri.encoded_of_query data in
       let prehash = Cstruct.of_string ~allocator:(fun len -> Cstruct.of_bigarray bigbuf ~len) data_str in
-      let `Hex sign = Nocrypto.Hash.SHA512.hmac ~key:secret prehash |> Hex.of_cstruct in
-      data_str, sign
+      let `Hex signature = Nocrypto.Hash.SHA512.hmac ~key:secret prehash |> Hex.of_cstruct in
+      data_str,
+      Cohttp.Header.of_list [
+        "content-type", "application/x-www-form-urlencoded";
+        "Key", key;
+        "Sign", signature;
+      ]
 
   let sign = make_sign ()
 
   let balances ?buf ~key ~secret () =
     let data = ["command", ["returnBalances"]] in
-    let data_str, signature = sign ~secret ~data in
-    let headers = Cohttp.Header.of_list [
-        "content-type", "application/x-www-form-urlencoded";
-        "Key", key;
-        "Sign", signature;
-      ]
-    in
+    let data_str, headers = sign ~key ~secret ~data in
     Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
     Body.to_string body >>| fun body_str ->
     match Yojson.Safe.from_string ?buf body_str with
@@ -262,13 +261,7 @@ module Rest = struct
         (if post_only then Some ("postOnly", ["1"]) else None)
       ]
     in
-    let data_str, signature = sign ~secret ~data in
-    let headers = Cohttp.Header.of_list [
-        "content-type", "application/x-www-form-urlencoded";
-        "Key", key;
-        "Sign", signature;
-      ]
-    in
+    let data_str, headers = sign ~key ~secret ~data in
     Monitor.try_with_or_error begin fun () ->
       Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
       Body.to_string body >>| fun body_str ->
