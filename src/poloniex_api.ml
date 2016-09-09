@@ -304,6 +304,45 @@ module Rest = struct
       | #Yojson.Safe.json -> invalid_arg "all_balances"
     end
 
+  type margin_account_summary_raw = {
+    totalValue: string;
+    pl: string;
+    lendingFees: string;
+    netValue: string;
+    totalBorrowedValue: string;
+    currentMargin: string;
+  } [@@deriving yojson]
+
+  type margin_account_summary = {
+    total_value: int [@default 0];
+    pl: int [@default 0];
+    lending_fees: int [@default 0];
+    net_value: int [@default 0];
+    total_borrowed_value: int [@default 0];
+    current_margin: float [@default 0.]
+  } [@@deriving create, sexp]
+
+  let margin_account_summary_of_raw { totalValue; pl; lendingFees; netValue;
+                                      totalBorrowedValue; currentMargin } =
+    let total_value = satoshis_int_of_float_exn @@ Float.of_string totalValue in
+    let pl = satoshis_int_of_float_exn @@ Float.of_string pl in
+    let lending_fees = satoshis_int_of_float_exn @@ Float.of_string lendingFees in
+    let net_value = satoshis_int_of_float_exn @@ Float.of_string netValue in
+    let total_borrowed_value = satoshis_int_of_float_exn @@ Float.of_string totalBorrowedValue in
+    let current_margin = Float.of_string currentMargin in
+    create_margin_account_summary ~total_value ~pl ~lending_fees ~net_value
+      ~total_borrowed_value ~current_margin ()
+
+  let margin_account_summary ?buf ~key ~secret () =
+    let data = ["command", ["returnMarginAccountSummary"]] in
+    let data_str, headers = sign ~key ~secret ~data in
+    Monitor.try_with_or_error begin fun () ->
+      Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+      Body.to_string body >>| fun body_str ->
+      Yojson.Safe.from_string ?buf body_str |> margin_account_summary_raw_of_yojson |>
+      Result.ok_or_failwith |> margin_account_summary_of_raw
+    end
+
   type order_response = {
     orderNumber: string;
     resultingTrades: trade_raw list;
