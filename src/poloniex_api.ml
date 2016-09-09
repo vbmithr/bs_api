@@ -225,18 +225,74 @@ module Rest = struct
 
   let sign = make_sign ()
 
-  let balances ?buf ~key ~secret () =
-    let data = ["command", ["returnBalances"]] in
+  type balance_raw = {
+    available: string;
+    onOrders: string;
+    btcValue: string;
+  } [@@deriving yojson]
+
+
+  type balance = {
+    available: int;
+    on_orders: int;
+    btc_value: int;
+  } [@@deriving create, sexp]
+
+  let balance_of_balance_raw br =
+    let on_orders = satoshis_int_of_float_exn @@ Float.of_string br.onOrders in
+    let available = satoshis_int_of_float_exn @@ Float.of_string br.available in
+    let btc_value = satoshis_int_of_float_exn @@ Float.of_string br.btcValue in
+    create_balance ~available ~on_orders ~btc_value ()
+
+  let balances ?buf ?(all=true) ~key ~secret () =
+    let data = List.filter_opt [
+        Some ("command", ["returnCompleteBalances"]);
+        if all then Some ("account", ["all"]) else None
+      ]
+    in
     let data_str, headers = sign ~key ~secret ~data in
-    Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
-    Body.to_string body >>| fun body_str ->
-    match Yojson.Safe.from_string ?buf body_str with
-    | `Assoc balances ->
-      List.rev_map balances ~f:begin function
-      | curr, `String qty -> curr, Float.of_string qty
-      | _ -> invalid_arg "balances"
-      end
-    | #Yojson.Safe.json -> invalid_arg "balances"
+    Monitor.try_with_or_error begin fun () ->
+      Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+      Body.to_string body >>| fun body_str ->
+      match Yojson.Safe.from_string ?buf body_str with
+      | `Assoc balances -> List.Assoc.map balances ~f:(fun b -> b |> balance_raw_of_yojson |> Result.ok_or_failwith |> balance_of_balance_raw)
+      | #Yojson.Safe.json -> invalid_arg "balances"
+    end
+
+  type account = Exchange | Margin | Lending [@@deriving sexp]
+
+  let account_of_string = function
+  | "exchange" -> Exchange
+  | "margin" -> Margin
+  | "lending" -> Lending
+  | s -> invalid_argf "account_of_string: %s" s ()
+
+  let string_of_account = function
+  | Exchange -> "exchange"
+  | Margin -> "margin"
+  | Lending -> "lending"
+
+  let nonzero_balances ?buf ?(account="all") ~key ~secret () =
+    let data = ["command", ["returnAvailableAccountBalances"];
+                "account", [account];
+               ]
+    in
+    let data_str, headers = sign ~key ~secret ~data in
+    Monitor.try_with_or_error begin fun () ->
+      Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+      Body.to_string body >>| fun body_str ->
+      match Yojson.Safe.from_string ?buf body_str with
+      | `Assoc balances -> List.map balances ~f:begin function
+        | account, `Assoc bs ->
+          account_of_string account, List.Assoc.map bs ~f:begin function
+          | `String bal ->
+            satoshis_int_of_float_exn @@ Float.of_string bal
+          | #Yojson.Safe.json -> invalid_arg "all_balances"
+          end
+        | account, #Yojson.Safe.json -> invalid_arg "all_balances"
+        end
+      | #Yojson.Safe.json -> invalid_arg "all_balances"
+    end
 
   type order_response = {
     orderNumber: string;

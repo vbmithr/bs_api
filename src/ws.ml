@@ -92,6 +92,24 @@ let plnx key secret topics =
   let process_user_cmd () =
     let process s =
       match String.split s ~on:' ' with
+      | ["balance"; currency]  ->
+        Rest.balances ~key ~secret () >>| begin function
+        | Error err -> error "%s" @@ Error.to_string_hum err
+        | Ok resp ->
+          info "found %d balances" @@ List.length resp;
+          match List.Assoc.find resp currency with
+        | Some b -> info "%s: %s" currency (Rest.sexp_of_balance b |> Sexplib.Sexp.to_string)
+        | None -> ()
+        end
+      | ["balances"]  ->
+        Rest.nonzero_balances ~key ~secret () >>| begin function
+        | Error err -> error "%s" @@ Error.to_string_hum err
+        | Ok resp -> List.iter resp ~f:begin fun (account, bs) ->
+            info "%s: %s"
+              (Rest.sexp_of_account account |> Sexplib.Sexp.to_string)
+              Sexplib.Sexp.(List (List.map bs ~f:(fun (c, b) -> List [sexp_of_string c; sexp_of_int b])) |> to_string)
+          end
+        end
       | ["oos"; symbol] ->
         Rest.open_orders ~symbol ~key ~secret () >>| begin function
         | Ok resp ->
