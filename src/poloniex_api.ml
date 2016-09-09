@@ -55,27 +55,29 @@ module Rest = struct
 
   let tickers ?buf () =
     let url = Uri.with_query' base_uri ["command", "returnTicker"] in
-    Client.get url >>= fun (resp, body) ->
-    Body.to_string body >>| fun body_str ->
-    match Yojson.Safe.from_string ?buf body_str with
-    | `Assoc tickers ->
-      List.rev_map tickers ~f:begin fun (symbol, t) ->
-        let raw = ticker_raw_of_yojson t |> Result.ok_or_failwith in
-        create_ticker
-          ~symbol
-          ~last:(Float.of_string raw.last)
-          ~ask:(Float.of_string raw.lowestAsk)
-          ~bid:(Float.of_string raw.highestBid)
-          ~pct_change:(Float.of_string raw.percentChange)
-          ~base_volume:(Float.of_string raw.baseVolume)
-          ~quote_volume:(Float.of_string raw.quoteVolume)
-          ~is_frozen:(Int.of_string raw.isFrozen |> Dtc.bool_of_int)
-          ~high24h:(Float.of_string raw.high24hr)
-          ~low24h:(Float.of_string raw.high24hr)
-          ()
+    Monitor.try_with_or_error begin fun () ->
+      Client.get url >>= fun (resp, body) ->
+      Body.to_string body >>| fun body_str ->
+      match Yojson.Safe.from_string ?buf body_str with
+      | `Assoc tickers ->
+        List.rev_map tickers ~f:begin fun (symbol, t) ->
+          let raw = ticker_raw_of_yojson t |> Result.ok_or_failwith in
+          create_ticker
+            ~symbol
+            ~last:(Float.of_string raw.last)
+            ~ask:(Float.of_string raw.lowestAsk)
+            ~bid:(Float.of_string raw.highestBid)
+            ~pct_change:(Float.of_string raw.percentChange)
+            ~base_volume:(Float.of_string raw.baseVolume)
+            ~quote_volume:(Float.of_string raw.quoteVolume)
+            ~is_frozen:(Int.of_string raw.isFrozen |> Dtc.bool_of_int)
+            ~high24h:(Float.of_string raw.high24hr)
+            ~low24h:(Float.of_string raw.high24hr)
+            ()
 
-      end
-    | #Yojson.Safe.json -> invalid_arg "tickers"
+        end
+      | #Yojson.Safe.json -> invalid_arg "tickers"
+    end
 
   let bids_asks_of_yojson side records =
     List.map records ~f:(function
@@ -104,29 +106,31 @@ module Rest = struct
         Option.map depth ~f:(fun lvls -> "depth", Int.to_string lvls);
       ]
     in
-    Client.get url >>= fun (resp, body) ->
-    Body.to_string body >>| fun body_str ->
-    match Yojson.Safe.from_string ?buf body_str with
-    | `Assoc ["error", `String msg] -> failwith msg
-    | `Assoc obj as json -> begin match symbol with
-      | "all" -> List.rev_map obj ~f:begin fun (symbol, b) ->
-          book_raw_of_yojson b |> Result.ok_or_failwith |> fun { asks; bids; isFrozen; seq } ->
-          symbol, create_books
-            ~asks:(bids_asks_of_yojson Sell asks)
-            ~bids:(bids_asks_of_yojson Buy bids)
-            ~isFrozen:(not (isFrozen = "0"))
-            ~seq ()
+    Monitor.try_with_or_error begin fun () ->
+      Client.get url >>= fun (resp, body) ->
+      Body.to_string body >>| fun body_str ->
+      match Yojson.Safe.from_string ?buf body_str with
+      | `Assoc ["error", `String msg] -> failwith msg
+      | `Assoc obj as json -> begin match symbol with
+        | "all" -> List.rev_map obj ~f:begin fun (symbol, b) ->
+            book_raw_of_yojson b |> Result.ok_or_failwith |> fun { asks; bids; isFrozen; seq } ->
+            symbol, create_books
+              ~asks:(bids_asks_of_yojson Sell asks)
+              ~bids:(bids_asks_of_yojson Buy bids)
+              ~isFrozen:(not (isFrozen = "0"))
+              ~seq ()
+          end
+        | _ ->
+          book_raw_of_yojson json |> Result.ok_or_failwith |> fun { asks; bids; isFrozen; seq } ->
+          [symbol, create_books
+             ~asks:(bids_asks_of_yojson Sell asks)
+             ~bids:(bids_asks_of_yojson Buy bids)
+             ~isFrozen:(not (isFrozen = "0"))
+             ~seq ()
+          ]
         end
-      | _ ->
-        book_raw_of_yojson json |> Result.ok_or_failwith |> fun { asks; bids; isFrozen; seq } ->
-        [symbol, create_books
-           ~asks:(bids_asks_of_yojson Sell asks)
-           ~bids:(bids_asks_of_yojson Buy bids)
-           ~isFrozen:(not (isFrozen = "0"))
-           ~seq ()
-        ]
-      end
-    | #Yojson.Safe.json -> invalid_arg "books"
+      | #Yojson.Safe.json -> invalid_arg "books"
+    end
 
   let trades ?log ?buf ?start ?stop symbol =
     let open Cohttp_async in
@@ -139,19 +143,21 @@ module Rest = struct
         map stop_sec ~f:(fun t -> "end", t);
       ]
     in
-    Client.get url >>= fun (resp, body) ->
-    Body.to_string body >>| fun body_str ->
-    match Yojson.Safe.from_string ?buf body_str with
-    | `List trades ->
-      maybe_debug log "<- trades %s %s %s (%d trades)"
-        symbol
-        (Option.sexp_of_t Time_ns.sexp_of_t start |> Sexplib.Sexp.to_string)
-        (Option.sexp_of_t Time_ns.sexp_of_t stop |> Sexplib.Sexp.to_string)
-        (List.length trades);
-      List.rev_map trades ~f:begin fun json ->
-        trade_raw_of_yojson json |> Result.ok_or_failwith |> trade_of_trade_raw
-      end
-    | #Yojson.Safe.json -> invalid_arg body_str
+    Monitor.try_with_or_error begin fun () ->
+      Client.get url >>= fun (resp, body) ->
+      Body.to_string body >>| fun body_str ->
+      match Yojson.Safe.from_string ?buf body_str with
+      | `List trades ->
+        maybe_debug log "<- trades %s %s %s (%d trades)"
+          symbol
+          (Option.sexp_of_t Time_ns.sexp_of_t start |> Sexplib.Sexp.to_string)
+          (Option.sexp_of_t Time_ns.sexp_of_t stop |> Sexplib.Sexp.to_string)
+          (List.length trades);
+        List.rev_map trades ~f:begin fun json ->
+          trade_raw_of_yojson json |> Result.ok_or_failwith |> trade_of_trade_raw
+        end
+      | #Yojson.Safe.json -> invalid_arg body_str
+    end
 
   let all_trades
       ?log
@@ -162,7 +168,7 @@ module Rest = struct
       symbol =
     let r, w = Pipe.create () in
     let rec inner from =
-      Monitor.try_with_or_error (fun () -> trades ?log ~buf ~stop:from symbol) >>= function
+      trades ?log ~buf ~stop:from symbol >>= function
       | Error err ->
         maybe_error log "%s" @@ Error.to_string_hum err;
         Clock_ns.after wait >>= fun () ->
@@ -190,22 +196,26 @@ module Rest = struct
 
   let currencies ?buf () =
     let url = Uri.add_query_params' base_uri ["command", "returnCurrencies"] in
-    Client.get url >>= fun (resp, body) ->
-    Body.to_string body >>| fun body_str ->
-    match Yojson.Safe.from_string ?buf body_str with
-    | `Assoc currs ->
-      List.map currs ~f:begin fun (code, obj) ->
-        code, currency_of_yojson obj |> Result.ok_or_failwith
-      end
-    | #Yojson.Safe.json -> invalid_arg "currencies"
+    Monitor.try_with_or_error begin fun () ->
+      Client.get url >>= fun (resp, body) ->
+      Body.to_string body >>| fun body_str ->
+      match Yojson.Safe.from_string ?buf body_str with
+      | `Assoc currs ->
+        List.map currs ~f:begin fun (code, obj) ->
+          code, currency_of_yojson obj |> Result.ok_or_failwith
+        end
+      | #Yojson.Safe.json -> invalid_arg "currencies"
+    end
 
   let symbols ?buf () =
     let url = Uri.with_query' base_uri ["command", "returnOrderBook"; "currencyPair", "all"; "depth", "0"] in
-    Client.get url >>= fun (resp, body) ->
-    Body.to_string body >>| fun body_str ->
-    match Yojson.Safe.from_string ?buf body_str with
-    | `Assoc syms -> List.rev_map syms ~f:fst
-    | #Yojson.Safe.json -> invalid_arg "symbols"
+    Monitor.try_with_or_error begin fun () ->
+      Client.get url >>= fun (resp, body) ->
+      Body.to_string body >>| fun body_str ->
+      match Yojson.Safe.from_string ?buf body_str with
+      | `Assoc syms -> List.rev_map syms ~f:fst
+      | #Yojson.Safe.json -> invalid_arg "symbols"
+    end
 
   let make_sign () =
     let bigbuf = Bigstring.create 1024 in
