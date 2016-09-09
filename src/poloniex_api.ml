@@ -287,12 +287,9 @@ module Rest = struct
   | Margin -> "margin"
   | Lending -> "lending"
 
-  let positive_balances ?buf ?(account="all") ~key ~secret () =
+  let positive_balances ?buf ~key ~secret () =
     let invarg json = invalid_argf "positive_balances: %s" (Yojson.Safe.to_string ?buf json) () in
-    let data = ["command", ["returnAvailableAccountBalances"];
-                "account", [account];
-               ]
-    in
+    let data = ["command", ["returnAvailableAccountBalances"]] in
     let data_str, headers = sign ~key ~secret ~data in
     Monitor.try_with_or_error begin fun () ->
       Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
