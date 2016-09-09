@@ -92,6 +92,14 @@ let plnx key secret topics =
   let process_user_cmd () =
     let process s =
       match String.split s ~on:' ' with
+      | ["positions"] ->
+        Rest.margin_positions ~key ~secret () >>| begin function
+        | Error err -> error "%s" @@ Error.to_string_hum err
+        | Ok resp ->  List.iter resp ~f:begin fun (symbol, ps) ->
+            info "%s: %s" symbol
+              (Sexplib.Std.sexp_of_option Rest.sexp_of_margin_position ps |> Sexplib.Sexp.to_string)
+          end
+        end
       | ["margin"] ->
         Rest.margin_account_summary ~key ~secret () >>| begin function
         | Error err -> error "%s" @@ Error.to_string_hum err

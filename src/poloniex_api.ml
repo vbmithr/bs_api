@@ -502,6 +502,55 @@ module Rest = struct
         List.Assoc.map oo_assoc ~f:(function `List oos -> List.map oos ~f:map_f | #Yojson.Safe.json -> failwith body_str)
       | #Yojson.Safe.json -> failwith body_str
     end
+
+  type margin_position_raw = {
+    amount: string;
+    total: string;
+    basePrice: string;
+    liquidationPrice: Yojson.Safe.json;
+    pl: string;
+    lendingFees: string;
+    typ: string [@key "type"];
+  } [@@deriving yojson]
+
+  type margin_position = {
+    price: int;
+    qty: int;
+    total: int;
+    pl: int;
+    lending_fees: int;
+    liquidation_price: int option;
+    side: Dtc.side
+  } [@@deriving create, sexp]
+
+  let margin_position_of_raw { amount; total; basePrice; liquidationPrice; pl; lendingFees; typ } =
+    let price = satoshis_int_of_float_exn @@ Float.of_string basePrice in
+    let qty = satoshis_int_of_float_exn @@ Float.of_string amount in
+    let total = satoshis_int_of_float_exn @@ Float.of_string total in
+    let pl = satoshis_int_of_float_exn @@ Float.of_string pl in
+    let lending_fees = satoshis_int_of_float_exn @@ Float.of_string lendingFees in
+    let liquidation_price = match liquidationPrice with
+    | `String price -> Option.some @@ satoshis_int_of_float_exn @@ Float.of_string price
+    | #Yojson.Safe.json -> None
+    in
+    let side = match typ with | "long" -> Some Dtc.Buy | "short" -> Some Dtc.Sell | _ -> None in
+    Option.map side ~f:begin fun side ->
+      create_margin_position ~side ~price ~qty ~total ~pl ~lending_fees ?liquidation_price ()
+    end
+
+  let margin_positions ?buf ?(symbol="all") ~key ~secret () =
+    let data = ["command", ["getMarginPosition"]; "currencyPair", [symbol]] in
+    let data_str, headers = sign ~key ~secret ~data in
+    let filter_map_f p = p |> margin_position_raw_of_yojson |> Result.ok_or_failwith |> margin_position_of_raw in
+    Monitor.try_with_or_error begin fun () ->
+      Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+      Body.to_string body >>| fun body_str ->
+      Yojson.Safe.from_string ?buf body_str |> function
+      | `Assoc ["error", `String msg] -> failwith msg
+      | `Assoc (("type", _) :: a) as p -> [symbol, filter_map_f p]
+      | `Assoc ps_assoc -> List.Assoc.map ps_assoc ~f:filter_map_f
+      | #Yojson.Safe.json -> failwith body_str
+    end
 end
 
 module Ws = struct
