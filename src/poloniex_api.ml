@@ -282,7 +282,7 @@ module Rest = struct
   | Margin -> "margin"
   | Lending -> "lending"
 
-  let nonzero_balances ?buf ?(account="all") ~key ~secret () =
+  let positive_balances ?buf ?(account="all") ~key ~secret () =
     let data = ["command", ["returnAvailableAccountBalances"];
                 "account", [account];
                ]
@@ -297,11 +297,11 @@ module Rest = struct
           account_of_string account, List.Assoc.map bs ~f:begin function
           | `String bal ->
             satoshis_int_of_float_exn @@ Float.of_string bal
-          | #Yojson.Safe.json -> invalid_arg "all_balances"
+          | #Yojson.Safe.json -> invalid_arg "positive_balances"
           end
-        | account, #Yojson.Safe.json -> invalid_arg "all_balances"
+        | account, #Yojson.Safe.json -> invalid_arg "positive_balances"
         end
-      | #Yojson.Safe.json -> invalid_arg "all_balances"
+      | #Yojson.Safe.json -> invalid_arg "positive_balances"
     end
 
   type margin_account_summary_raw = {

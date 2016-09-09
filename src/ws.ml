@@ -107,7 +107,7 @@ let plnx key secret topics =
         | None -> ()
         end
       | ["balances"]  ->
-        Rest.nonzero_balances ~key ~secret () >>| begin function
+        Rest.positive_balances ~key ~secret () >>| begin function
         | Error err -> error "%s" @@ Error.to_string_hum err
         | Ok resp -> List.iter resp ~f:begin fun (account, bs) ->
             info "%s: %s"
