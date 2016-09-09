@@ -265,8 +265,13 @@ module Rest = struct
       Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
       Body.to_string body >>| fun body_str ->
       match Yojson.Safe.from_string ?buf body_str with
-      | `Assoc balances -> List.Assoc.map balances ~f:(fun b -> b |> balance_raw_of_yojson |> Result.ok_or_failwith |> balance_of_balance_raw)
-      | #Yojson.Safe.json -> invalid_arg "balances"
+      | `Assoc ["error", `String msg] -> failwith msg
+      | `Assoc balances -> List.Assoc.map balances ~f:begin fun b ->
+          b |> balance_raw_of_yojson |> function
+          | Ok br -> balance_of_balance_raw br
+          | Error _ -> invalid_argf "balances: %s" body_str ()
+        end
+      | json -> invalid_argf "balances: %s" body_str ()
     end
 
   type account = Exchange | Margin | Lending [@@deriving sexp]
@@ -283,6 +288,7 @@ module Rest = struct
   | Lending -> "lending"
 
   let positive_balances ?buf ?(account="all") ~key ~secret () =
+    let invarg json = invalid_argf "positive_balances: %s" (Yojson.Safe.to_string ?buf json) () in
     let data = ["command", ["returnAvailableAccountBalances"];
                 "account", [account];
                ]
@@ -292,16 +298,17 @@ module Rest = struct
       Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
       Body.to_string body >>| fun body_str ->
       match Yojson.Safe.from_string ?buf body_str with
+      | `Assoc ["error", `String msg] -> failwith msg
       | `Assoc balances -> List.map balances ~f:begin function
         | account, `Assoc bs ->
           account_of_string account, List.Assoc.map bs ~f:begin function
           | `String bal ->
             satoshis_int_of_float_exn @@ Float.of_string bal
-          | #Yojson.Safe.json -> invalid_arg "positive_balances"
+          | json -> invarg json
           end
-        | account, #Yojson.Safe.json -> invalid_arg "positive_balances"
+        | account, json -> invarg json
         end
-      | #Yojson.Safe.json -> invalid_arg "positive_balances"
+      | json -> invarg json
     end
 
   type margin_account_summary_raw = {
