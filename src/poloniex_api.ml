@@ -343,8 +343,9 @@ module Rest = struct
     Monitor.try_with_or_error begin fun () ->
       Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
       Body.to_string body >>| fun body_str ->
-      Yojson.Safe.from_string ?buf body_str |> margin_account_summary_raw_of_yojson |>
-      Result.ok_or_failwith |> margin_account_summary_of_raw
+      match Yojson.Safe.from_string ?buf body_str |> margin_account_summary_raw_of_yojson with
+      | Error msg -> failwith body_str
+      | Ok mas_raw -> margin_account_summary_of_raw mas_raw
     end
 
   type order_response = {
