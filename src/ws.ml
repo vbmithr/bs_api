@@ -1,5 +1,4 @@
 open Core.Std
-open Core_extended.Std
 open Async.Std
 open Log.Global
 
@@ -95,10 +94,16 @@ let plnx key secret topics =
       | ["positions"] ->
         Rest.margin_positions ~key ~secret () >>| begin function
         | Error err -> error "%s" @@ Error.to_string_hum err
-        | Ok resp ->  List.iter resp ~f:begin fun (symbol, ps) ->
-            info "%s: %s" symbol
-              (Sexplib.Std.sexp_of_option Rest.sexp_of_margin_position ps |> Sexplib.Sexp.to_string)
-          end
+        | Ok resp ->
+          let nb_nonempty = List.fold_left resp ~init:0 ~f:begin fun i (symbol, p) ->
+              match p with
+              | Some p ->
+                info "%s: %s" symbol (Rest.sexp_of_margin_position p |> Sexplib.Sexp.to_string);
+                succ i
+              | None -> i
+            end
+          in
+          if nb_nonempty = 0 then info "No positions"
         end
       | ["margin"] ->
         Rest.margin_account_summary ~key ~secret () >>| begin function
@@ -123,10 +128,17 @@ let plnx key secret topics =
               Sexplib.Sexp.(List (List.map bs ~f:(fun (c, b) -> List [sexp_of_string c; sexp_of_int b])) |> to_string)
           end
         end
-      | ["oos"; symbol] ->
-        Rest.open_orders ~symbol ~key ~secret () >>| begin function
+      | ["oos"] ->
+        Rest.open_orders ~key ~secret () >>| begin function
         | Ok resp ->
-          List.iter resp ~f:(fun (s, oos) -> info "%s: %s" s (Sexplib.Std.sexp_of_list Rest.sexp_of_open_orders_resp oos |> Sexplib.Sexp.to_string))
+          let nb_nonempty = List.fold_left ~init:0  resp ~f:begin fun i (s, oos) ->
+              if oos <> [] then begin
+                info "%s: %s" s (Sexplib.Std.sexp_of_list Rest.sexp_of_open_orders_resp oos |> Sexplib.Sexp.to_string);
+                succ i
+              end
+              else i
+            end
+          in if nb_nonempty = 0 then info "No open orders"
         | Error err -> error "%s" @@ Error.to_string_hum err
         end
       | ["th"; symbol] ->
@@ -135,23 +147,42 @@ let plnx key secret topics =
           List.iter resp ~f:(fun (s, ths) -> info "%s: %s" s (Sexplib.Std.sexp_of_list Rest.sexp_of_trade_history ths |> Sexplib.Sexp.to_string))
         | Error err -> error "%s" @@ Error.to_string_hum err
         end
-      | [symbol; side; price; qty] ->
-        let side = match side with "b" -> Dtc.Dtc.Buy | "s" -> Sell | _ -> failwith "side" in
+      | ["cancel"; id] ->
+        let id = Int.of_string id in
+        Rest.cancel ~key ~secret id >>| begin function
+        | Ok { success } -> info "canceled order %d: %d" id success
+        | Error err -> error "%s" @@ Error.to_string_hum err
+        end
+      | [side; symbol; price; qty] ->
+        let side = match side with "buy" -> Dtc.Dtc.Buy | "sell" -> Sell | _ -> failwith "side" in
         let price = Int.of_string price in
         let qty = Int.of_string qty in
-        Rest.order ~key ~secret ~symbol ~side ~price ~qty () >>| begin function
-        | Ok resp -> info "%s" (Rest.order_response_to_yojson resp |> Yojson.Safe.to_string)
+        if margin_enabled symbol then
+          Rest.margin_order ~key ~secret ~symbol ~side ~price ~qty () >>| begin function
+          | Ok resp -> info "%s" (Rest.sexp_of_order_response resp |> Sexplib.Sexp.to_string)
+          | Error err -> error "%s" @@ Error.to_string_hum err
+          end
+        else
+          Rest.order ~key ~secret ~symbol ~side ~price ~qty () >>| begin function
+          | Ok resp -> info "%s" (Rest.sexp_of_order_response resp |> Sexplib.Sexp.to_string)
+          | Error err -> error "%s" @@ Error.to_string_hum err
+          end
+      | ["modify"; id; price] ->
+        let id = Int.of_string id in
+        let price = Int.of_string price in
+        Rest.modify ~key ~secret ~price id >>| begin function
+        | Ok resp -> info "%s" (Rest.sexp_of_order_response resp |> Sexplib.Sexp.to_string)
         | Error err -> error "%s" @@ Error.to_string_hum err
         end
       | h::t ->
         error "Unknown command %s" h; Deferred.unit
       | [] -> error "Empty command"; Deferred.unit
     in
-    let rec loop () =
-      In_thread.run Readline.input_line >>= function
-      | Some msg -> process msg >>= loop
-      | None -> Deferred.unit
-    in loop ()
+    let rec loop () = Reader.(read_line @@ Lazy.force stdin) >>= function
+      | `Eof -> Deferred.unit
+      | `Ok line -> process line >>= loop
+    in
+    loop ()
   in
   let to_ws, to_ws_w = Pipe.create () in
   let r = PLNX.Ws.open_connection ~log:(Lazy.force log) to_ws in

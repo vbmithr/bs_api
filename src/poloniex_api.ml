@@ -4,6 +4,20 @@ open Async.Std
 open Dtc
 open Bs_devkit.Core
 
+let margin_enabled = function
+| "BTC_XMR"
+| "BTC_ETH"
+| "BTC_CLAM"
+| "BTC_MAID"
+| "BTC_FCT"
+| "BTC_DASH"
+| "BTC_STR"
+| "BTC_BTS"
+| "BTC_LTC"
+| "BTC_XRP"
+| "BTC_DOGE" -> true
+| _ -> false
+
 type ticker = {
   symbol: string;
   last: float;
@@ -19,7 +33,7 @@ type ticker = {
 
 type trade_raw = {
   globalTradeID: (Yojson.Safe.json [@default `Null]);
-  tradeID: int;
+  tradeID: Yojson.Safe.json;
   date: string;
   typ: string [@key "type"];
   rate: string;
@@ -27,8 +41,15 @@ type trade_raw = {
   total: string;
 } [@@deriving create,yojson]
 
+let get_tradeID = function
+  | `Null -> None
+  | `Int i -> Some i
+  | `String s -> Option.some @@ Int.of_string s
+  | #Yojson.Safe.json -> invalid_arg "int_of_globalTradeID"
+
 let trade_of_trade_raw { tradeID; date; typ; rate; amount } =
-  let date = Time_ns.(add (of_string (date ^ "Z")) (Span.of_int_ns tradeID)) in
+  let id = Option.value ~default:0 (get_tradeID tradeID) in
+  let date = Time_ns.(add (of_string (date ^ "Z")) (Span.of_int_ns id)) in
   let typ = match typ with "buy" -> Dtc.Buy | "sell" -> Sell | _ -> invalid_arg "typ_of_string" in
   let rate = Fn.compose satoshis_int_of_float_exn Float.of_string rate in
   let amount = Fn.compose satoshis_int_of_float_exn Float.of_string amount in
@@ -348,11 +369,46 @@ module Rest = struct
       | Ok mas_raw -> margin_account_summary_of_raw mas_raw
     end
 
-  type order_response = {
+  type order_response_raw = {
+    success: int [@default 1];
+    message: string [@default ""];
     orderNumber: string;
-    resultingTrades: trade_raw list;
+    resultingTrades: Yojson.Safe.json;
     amountUnfilled: string [@default ""];
   } [@@deriving yojson]
+
+  let fix_resultingTrades = function
+  | `List resulting -> List.map resulting ~f:(fun tr -> trade_raw_of_yojson tr |> Result.ok_or_failwith)
+  | `Assoc [_, `List resulting] -> List.map resulting ~f:(fun tr -> trade_raw_of_yojson tr |> Result.ok_or_failwith)
+  | #Yojson.Safe.json -> invalid_arg "fix_resultingTrades"
+
+  type trade_info = {
+    gid: int option;
+    id: int;
+    trade: DB.trade;
+  } [@@deriving create, sexp]
+
+  type order_response = {
+    id: int;
+    trades: trade_info list;
+    amount_unfilled: int option;
+  } [@@deriving create, sexp]
+
+  let trade_info_of_resultingTrades tr =
+    let id = Option.value ~default:0 @@ get_tradeID tr.tradeID in
+    let gid = get_tradeID tr.globalTradeID in
+    let trade = trade_of_trade_raw tr in
+    create_trade_info ?gid ~id ~trade ()
+
+  let order_response_of_raw { orderNumber; resultingTrades; amountUnfilled } =
+    let id = Int.of_string orderNumber in
+    let amount_unfilled = if amountUnfilled <> "" then
+        Option.some @@ satoshis_int_of_float_exn @@ Float.of_string amountUnfilled
+      else None
+    in
+    let trades = fix_resultingTrades resultingTrades in
+    let trades = List.map trades ~f:trade_info_of_resultingTrades in
+    create_order_response ~id ~trades ?amount_unfilled ()
 
   let order
       ?buf
@@ -377,8 +433,69 @@ module Rest = struct
       Body.to_string body >>| fun body_str ->
       Yojson.Safe.from_string ?buf body_str |> function
       | `Assoc ["error", `String msg] -> failwith msg
-      | #Yojson.Safe.json as json -> match order_response_of_yojson json with
-      | Ok res -> res
+      | resp -> match order_response_raw_of_yojson resp with
+      | Ok res -> order_response_of_raw res
+      | Error _ -> failwith body_str
+    end
+
+  type cancel_response_raw = {
+    success: int;
+    amount: string;
+    message: string;
+  } [@@deriving yojson]
+
+  let cancel ?buf ~key ~secret id =
+    let data = [
+        "command", ["cancelOrder"];
+        "orderNumber", [Int.to_string id];
+    ]
+    in
+    let data_str, headers = sign ~key ~secret ~data in
+    Monitor.try_with_or_error begin fun () ->
+      Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+      Body.to_string body >>| fun body_str ->
+      Yojson.Safe.from_string ?buf body_str |> function
+      | `Assoc ["error", `String msg] -> failwith msg
+      | resp -> cancel_response_raw_of_yojson resp |> Result.ok_or_failwith
+    end
+
+  let modify ?buf ?qty ~key ~secret ~price id =
+    let data = List.filter_opt [
+        Some ("command", ["moveOrder"]);
+        Some ("orderNumber", [Int.to_string id]);
+        Some ("rate", [price // 100_000_000 |> Float.to_string]);
+        Option.map qty ~f:(fun a -> "amount", [a // 100_000_000 |> Float.to_string])
+      ]
+    in
+    let data_str, headers = sign ~key ~secret ~data in
+    Monitor.try_with_or_error begin fun () ->
+      Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+      Body.to_string body >>| fun body_str ->
+      Yojson.Safe.from_string ?buf body_str |> function
+      | `Assoc ["error", `String msg] -> failwith msg
+      | resp -> match order_response_raw_of_yojson resp with
+      | Ok res -> order_response_of_raw res
+      | Error _ -> failwith body_str
+    end
+
+  let margin_order ?buf ?max_lending_rate ~key ~secret ~side ~symbol ~price ~qty () =
+    let data = List.filter_opt [
+        Some ("command", [match side with Dtc.Buy -> "marginBuy" | Sell -> "marginSell" ]);
+        Some ("currencyPair", [symbol]);
+        Some ("rate", [Float.to_string @@ price // 100_000_000]);
+        Some ("amount", [Float.to_string @@ qty // 100_000_000]);
+        Option.map max_lending_rate ~f:(fun r -> "lendingRate", [Float.to_string r]);
+      ]
+    in
+    let data_str, headers = sign ~key ~secret ~data in
+    Monitor.try_with_or_error begin fun () ->
+      Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+      Body.to_string body >>| fun body_str ->
+      Yojson.Safe.from_string ?buf body_str |> function
+      | `Assoc ["error", `String msg] -> failwith msg
+      | json -> match order_response_raw_of_yojson json with
+      | Ok resp ->
+        if resp.success <> 1 then failwith resp.message else order_response_of_raw resp
       | Error _ -> failwith body_str
     end
 
@@ -738,7 +855,7 @@ module Ws = struct
       let low24h = Float.of_string low24h in
       create_ticker ~symbol ~last ~ask ~bid ~pct_change ~base_volume ~quote_volume ~is_frozen
         ~high24h ~low24h ()
-    | #Yojson.Safe.json as json -> invalid_argf "ticker_of_json: %s" Yojson.Safe.(to_string json) ()
+    | json -> invalid_argf "ticker_of_json: %s" Yojson.Safe.(to_string json) ()
 
     type book_raw = {
       rate: string;
