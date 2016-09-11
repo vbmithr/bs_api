@@ -482,13 +482,23 @@ module Rest = struct
       | Error _ -> failwith body_str
     end
 
-  let margin_order ?buf ?max_lending_rate ~key ~secret ~side ~symbol ~price ~qty () =
+  let margin_order
+      ?buf
+      ?(tif=Dtc.TimeInForce.Good_till_canceled)
+      ?(post_only=false)
+      ?max_lending_rate
+      ~key ~secret ~side ~symbol ~price ~qty () =
     let data = List.filter_opt [
         Some ("command", [match side with Dtc.Buy -> "marginBuy" | Sell -> "marginSell" ]);
         Some ("currencyPair", [symbol]);
         Some ("rate", [Float.to_string @@ price // 100_000_000]);
         Some ("amount", [Float.to_string @@ qty // 100_000_000]);
         Option.map max_lending_rate ~f:(fun r -> "lendingRate", [Float.to_string r]);
+        (match tif with
+        | Fill_or_kill -> Some ("fillOrKill", ["1"])
+        | Immediate_or_cancel -> Some ("immediateOrCancel", ["1"])
+        | _ -> None);
+        (if post_only then Some ("postOnly", ["1"]) else None)
       ]
     in
     let data_str, headers = sign ~key ~secret ~data in
