@@ -124,69 +124,78 @@ module Rest = struct
     error: error_content
   } [@@deriving yojson]
 
-  let handle_rest_error ?log ~name (resp, body) =
-    let rec inner () =
+  let call ?buf ?log ?(span=Time_ns.Span.of_int_sec 1) ?(max_tries=3) ~name ~f uri =
+    let rec inner_exn try_id =
+      f uri >>= fun (resp, body) ->
       Body.to_string body >>= fun body_str ->
       let status = Response.status resp in
       let status_code = C.Code.code_of_status status in
-      if C.Code.is_success status_code then return body_str
+      if C.Code.is_success status_code then return @@ Yojson.Safe.from_string ?buf body_str
       else if C.Code.is_client_error status_code then begin
-        match error_of_yojson Yojson.Safe.(from_string body_str) with
+        match error_of_yojson Yojson.Safe.(from_string ?buf body_str) with
         | Ok { error = { name; message }} -> failwithf "%s: %s" name message ()
         | Error _ -> failwithf "%s: json error" name ()
       end
       else if C.Code.is_server_error status_code then begin
-        maybe_error log "%s: %s" name (C.Code.sexp_of_status_code status |> Sexplib.Sexp.to_string_hum);
-        after @@ Time.Span.of_int_sec 1 >>=
-        inner
+        let status_code_str = (C.Code.sexp_of_status_code status |> Sexplib.Sexp.to_string_hum) in
+        maybe_error log "%s: %s" name status_code_str;
+        Clock_ns.after span >>= fun () ->
+        if try_id >= max_tries then failwithf "%s: %s" name status_code_str ()
+        else inner_exn @@ succ try_id
       end
-      else failwithf "%s: Unexpected HTTP return status %s"
-          name (C.Code.sexp_of_status_code status |> Sexplib.Sexp.to_string_hum) ()
+      else failwithf "%s: Unexpected HTTP return status %s" name (C.Code.sexp_of_status_code status |> Sexplib.Sexp.to_string_hum) ()
     in
-    inner ()
+    Monitor.try_with_or_error (fun () -> inner_exn 0)
 
   let mk_headers ?log ?(data="") ~key ~secret verb uri =
     let query_params = Crypto.mk_query_params ?log ~data ~key ~secret `Rest verb uri in
     Cohttp.Header.of_list @@
     ("content-type", "application/json") :: List.Assoc.map query_params ~f:List.hd_exn
 
+  module ApiKey = struct
+    let dtc ?buf ?log ?username ~testnet ~key ~secret () =
+      let path = "/api/v1/apiKey/dtc/" ^ match username with None -> "all" | Some u -> "get" in
+      let query = match username with None -> [] | Some u -> ["get", u] in
+      let uri = if testnet then testnet_uri else uri in
+      let uri = Uri.with_query' uri query in
+      let uri = Uri.with_path uri path in
+      let headers = mk_headers ?log ~key ~secret `GET uri in
+      call ?buf ?log ~name:"position" ~f:(Client.get ~headers) uri
+  end
+
   module Position = struct
-    let position ?log ~testnet ~key ~secret () =
+    let position ?buf ?log ~testnet ~key ~secret () =
       let uri = Uri.with_path (if testnet then testnet_uri else uri) "/api/v1/position" in
       let headers = mk_headers ?log ~key ~secret `GET uri in
-      Client.get ~headers uri >>=
-      handle_rest_error ?log ~name:"position"
+      call ?buf ?log ~name:"position" ~f:(Client.get ~headers) uri
   end
 
   module Order = struct
-    let submit ?log ~testnet ~key ~secret orders =
+    let submit ?buf ?log ~testnet ~key ~secret orders =
       let uri = Uri.with_path (if testnet then testnet_uri else uri) "/api/v1/order/bulk" in
-      let body_str = Yojson.Safe.to_string @@ `Assoc ["orders", `List orders] in
+      let body_str = Yojson.Safe.to_string ?buf @@ `Assoc ["orders", `List orders] in
       let body = Body.of_string body_str in
       let headers = mk_headers ?log ~key ~secret ~data:body_str `POST uri in
       maybe_debug log "-> %s" body_str;
-      Client.post ~chunked:false ~body ~headers uri >>=
-      handle_rest_error ?log ~name:"submit"
+      call ?buf ?log ~name:"submit" ~f:(Client.post ~chunked:false ~body ~headers) uri
 
-    let update ?log ~testnet ~key ~secret orders =
+    let update ?buf ?log ~testnet ~key ~secret orders =
       let uri = Uri.with_path (if testnet then testnet_uri else uri) "/api/v1/order/bulk" in
-      let body_str = Yojson.Safe.to_string @@ `Assoc ["orders", `List orders] in
+      let body_str = Yojson.Safe.to_string ?buf @@ `Assoc ["orders", `List orders] in
       let body = Body.of_string body_str in
       let headers = mk_headers ?log ~key ~secret ~data:body_str `PUT uri in
       maybe_debug log "-> %s" body_str;
-      Client.put ~chunked:false ~body ~headers uri >>=
-      handle_rest_error ?log ~name:"update"
+      call ?buf ?log ~name:"update" ~f:(Client.put ~chunked:false ~body ~headers) uri
 
-    let cancel ?log ~testnet ~key ~secret orderID =
+    let cancel ?buf ?log ~testnet ~key ~secret orderID =
       let uri = Uri.with_path (if testnet then testnet_uri else uri) "/api/v1/order" in
       let body_str = `Assoc ["orderID", `String Uuid.(to_string orderID)] |> Yojson.Safe.to_string in
       let body = Body.of_string body_str in
       let headers = mk_headers ?log ~key ~secret ~data:body_str `DELETE uri in
       maybe_debug log "-> %s" body_str;
-      Client.delete ~chunked:false ~body ~headers uri >>=
-      handle_rest_error ?log ~name:"cancel"
+      call ?buf ?log ~name:"cancel" ~f:(Client.delete ~chunked:false ~body ~headers) uri
 
-    let cancel_all ?log ?symbol ?filter ~testnet ~key ~secret () =
+    let cancel_all ?buf ?log ?symbol ?filter ~testnet ~key ~secret () =
       let uri = Uri.with_path (if testnet then testnet_uri else uri) "/api/v1/order/all" in
       let body = `Assoc begin
           List.filter_opt
@@ -195,21 +204,19 @@ module Rest = struct
             ]
         end
       in
-      let body_str = Yojson.Safe.to_string body in
+      let body_str = Yojson.Safe.to_string ?buf body in
       let body = Body.of_string body_str in
-      let headers = mk_headers ?log ~key ~secret ~data:body_str `DELETE uri in 
+      let headers = mk_headers ?log ~key ~secret ~data:body_str `DELETE uri in
       maybe_debug log "-> %s" body_str;
-      Client.delete ~chunked:false ~body ~headers uri >>=
-      handle_rest_error ?log ~name:"cancel_all"
+      call ?buf ?log ~name:"cancel_all" ~f:(Client.delete ~chunked:false ~body ~headers) uri
 
-    let cancel_all_after ?log ~testnet ~key ~secret timeout =
+    let cancel_all_after ?buf ?log ~testnet ~key ~secret timeout =
       let uri = Uri.with_path (if testnet then testnet_uri else uri) "/api/v1/order/cancelAllAfter" in
-      let body_str = `Assoc ["timeout", `Int timeout] |> Yojson.Safe.to_string in
+      let body_str = Yojson.Safe.to_string ?buf @@ `Assoc ["timeout", `Int timeout] in
       let body = Body.of_string body_str in
       let headers = mk_headers ?log ~key ~secret ~data:body_str `POST uri in
       maybe_debug log "-> %s" body_str;
-      Client.post ~chunked:false ~body ~headers uri >>=
-      handle_rest_error ?log ~name:"cancel_all_after"
+      call ?buf ?log ~name:"cancel_all_after" ~f:(Client.post ~chunked:false ~body ~headers) uri
   end
 end
 

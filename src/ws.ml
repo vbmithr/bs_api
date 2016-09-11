@@ -21,20 +21,45 @@ let base_spec =
   +> flag "-loglevel" (optional int) ~doc:"1-3 loglevel"
   +> flag "-testnet" no_arg ~doc:" Use testnet"
   +> flag "-md" no_arg ~doc:" Use multiplexing"
+  +> flag "-rest" no_arg ~doc:" Tread stdin as input for REST commands"
   +> anon (sequence ("topic" %: string))
 
-let bitmex key secret testnet md topics =
+let bitmex key secret testnet md rest topics =
   let buf = Bi_outbuf.create 4096 in
-  let to_ws = Pipe.map Reader.(stdin |> Lazy.force |> pipe) ~f:(Yojson.Safe.from_string ~buf) in
-  let r = BMEX.Ws.open_connection ~buf ~to_ws ~log:Lazy.(force log) ~auth:(key, secret) ~testnet ~topics ~md () in
-  Pipe.transfer r Writer.(pipe @@ Lazy.force stderr) ~f:(fun s -> Yojson.Safe.to_string ~buf s ^ "\n")
+  let process_user_cmd () =
+    let process s =
+      match String.split s ~on:' ' with
+      | ["dtc"] ->  begin BMEX.Rest.ApiKey.dtc ~buf ~testnet ~key ~secret () >>| function
+        | Error err -> error "%s" @@ Error.to_string_hum err
+        | Ok json -> info "%s" @@ Yojson.Safe.to_string ~buf json
+        end
+      | ["position"] -> begin BMEX.Rest.Position.position ~buf ~testnet ~key ~secret () >>| function
+        | Error err -> error "%s" @@ Error.to_string_hum err
+        | Ok json -> info "%s" @@ Yojson.Safe.to_string ~buf json
+        end
+      | h::t ->
+        error "Unknown command %s" h; Deferred.unit
+      | [] -> error "Empty command"; Deferred.unit
+    in
+    let rec loop () = Reader.(read_line @@ Lazy.force stdin) >>= function
+      | `Eof -> Deferred.unit
+      | `Ok line -> process line >>= loop
+    in
+    loop ()
+  in
+  let to_ws = if rest then None else Option.some @@ Pipe.map Reader.(stdin |> Lazy.force |> pipe) ~f:(Yojson.Safe.from_string ~buf) in
+  let r = BMEX.Ws.open_connection ~buf ?to_ws ~log:Lazy.(force log) ~auth:(key, secret) ~testnet ~topics ~md () in
+  Deferred.all_unit [
+    Pipe.transfer r Writer.(pipe @@ Lazy.force stderr) ~f:(fun s -> Yojson.Safe.to_string ~buf s ^ "\n");
+    if rest then process_user_cmd () else Deferred.unit
+  ]
 
 let bitmex =
-  let run cfg loglevel testnet md topics =
+  let run cfg loglevel testnet md rest topics =
     let exchange = "BMEX" ^ (if testnet then "T" else "") in
     let key, secret = find_auth cfg exchange in
     Option.iter loglevel ~f:(Fn.compose set_level loglevel_of_int);
-    don't_wait_for @@ bitmex key secret testnet md topics;
+    don't_wait_for @@ bitmex key secret testnet md rest topics;
     never_returns @@ Scheduler.go ()
   in
   Command.basic ~summary:"BitMEX WS client" base_spec run
@@ -49,7 +74,7 @@ let kaiko topics =
   end
 
 let kaiko =
-  let run _cfg loglevel _testnet _md topics =
+  let run _cfg loglevel _testnet _md _rest topics =
     Option.iter loglevel ~f:(Fn.compose set_level loglevel_of_int);
     don't_wait_for @@ kaiko topics;
     never_returns @@ Scheduler.go ()
@@ -78,7 +103,7 @@ let bfx key secret topics =
   end
 
 let bfx =
-  let run cfg loglevel _testnet _md topics =
+  let run cfg loglevel _testnet _md _rest topics =
     let key, secret = find_auth cfg "BFX" in
     Option.iter loglevel ~f:(Fn.compose set_level loglevel_of_int);
     don't_wait_for @@ bfx key secret topics;
@@ -210,7 +235,7 @@ let plnx key secret topics =
   ]
 
 let plnx =
-  let run cfg loglevel _testnet _md topics =
+  let run cfg loglevel _testnet _md _rest topics =
     Option.iter loglevel ~f:(Fn.compose set_level loglevel_of_int);
     let key, secret = find_auth cfg "PLNX" in
     don't_wait_for @@ plnx key secret topics;
@@ -226,7 +251,7 @@ let plnx_trades currency =
   Shutdown.exit 0
 
 let plnx_trades =
-  let run cfg loglevel _testnet _md topics =
+  let run cfg loglevel _testnet _md _rest topics =
     Option.iter loglevel ~f:(Fn.compose set_level loglevel_of_int);
     begin match topics with
     | [] -> invalid_arg "topics"
