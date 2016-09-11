@@ -372,12 +372,14 @@ module Rest = struct
   type order_response_raw = {
     success: int [@default 1];
     message: string [@default ""];
-    orderNumber: string;
-    resultingTrades: Yojson.Safe.json;
+    error: string [@default ""];
+    orderNumber: string [@default ""];
+    resultingTrades: Yojson.Safe.json [@default `Null];
     amountUnfilled: string [@default ""];
   } [@@deriving yojson]
 
   let fix_resultingTrades = function
+  | `Null -> []
   | `List resulting -> List.map resulting ~f:(fun tr -> trade_raw_of_yojson tr |> Result.ok_or_failwith)
   | `Assoc [_, `List resulting] -> List.map resulting ~f:(fun tr -> trade_raw_of_yojson tr |> Result.ok_or_failwith)
   | #Yojson.Safe.json -> invalid_arg "fix_resultingTrades"
@@ -389,7 +391,7 @@ module Rest = struct
   } [@@deriving create, sexp]
 
   type order_response = {
-    id: int;
+    id: int option;
     trades: trade_info list;
     amount_unfilled: int option;
   } [@@deriving create, sexp]
@@ -400,15 +402,17 @@ module Rest = struct
     let trade = trade_of_trade_raw tr in
     create_trade_info ?gid ~id ~trade ()
 
-  let order_response_of_raw { orderNumber; resultingTrades; amountUnfilled } =
-    let id = Int.of_string orderNumber in
+  let order_response_of_raw { success; message; error; orderNumber; resultingTrades; amountUnfilled } =
+    if success = 0 then Result.fail error
+    else
+    let id = try Option.some @@ Int.of_string orderNumber with _ -> None in
     let amount_unfilled = if amountUnfilled <> "" then
         Option.some @@ satoshis_int_of_float_exn @@ Float.of_string amountUnfilled
       else None
     in
     let trades = fix_resultingTrades resultingTrades in
     let trades = List.map trades ~f:trade_info_of_resultingTrades in
-    create_order_response ~id ~trades ?amount_unfilled ()
+    Result.return @@ create_order_response ?id ~trades ?amount_unfilled ()
 
   let order
       ?buf
@@ -432,16 +436,17 @@ module Rest = struct
       Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
       Body.to_string body >>| fun body_str ->
       Yojson.Safe.from_string ?buf body_str |> function
-      | `Assoc ["error", `String msg] -> failwith msg
+      | `Assoc ["error", `String msg] -> failwith msg (* OK here! *)
       | resp -> match order_response_raw_of_yojson resp with
-      | Ok res -> order_response_of_raw res
+      | Ok res -> order_response_of_raw res |> Result.ok_or_failwith
       | Error _ -> failwith body_str
     end
 
   type cancel_response_raw = {
     success: int;
-    amount: string;
-    message: string;
+    amount: string [@default ""];
+    message: string [@default ""];
+    error: string [@default ""]
   } [@@deriving yojson]
 
   let cancel ?buf ~key ~secret id =
@@ -454,9 +459,9 @@ module Rest = struct
     Monitor.try_with_or_error begin fun () ->
       Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
       Body.to_string body >>| fun body_str ->
-      Yojson.Safe.from_string ?buf body_str |> function
-      | `Assoc ["error", `String msg] -> failwith msg
-      | resp -> cancel_response_raw_of_yojson resp |> Result.ok_or_failwith
+      let resp = Yojson.Safe.from_string ?buf body_str in
+      let resp = cancel_response_raw_of_yojson resp |> Result.ok_or_failwith in
+      if resp.success = 1 then () else failwith resp.error
     end
 
   let modify ?buf ?qty ~key ~secret ~price id =
@@ -472,9 +477,8 @@ module Rest = struct
       Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
       Body.to_string body >>| fun body_str ->
       Yojson.Safe.from_string ?buf body_str |> function
-      | `Assoc ["error", `String msg] -> failwith msg
       | resp -> match order_response_raw_of_yojson resp with
-      | Ok res -> order_response_of_raw res
+      | Ok res -> order_response_of_raw res |> Result.ok_or_failwith
       | Error _ -> failwith body_str
     end
 
@@ -492,10 +496,25 @@ module Rest = struct
       Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
       Body.to_string body >>| fun body_str ->
       Yojson.Safe.from_string ?buf body_str |> function
-      | `Assoc ["error", `String msg] -> failwith msg
+      | `Assoc ["error", `String msg] -> failwith msg (* OK here! *)
       | json -> match order_response_raw_of_yojson json with
-      | Ok resp ->
-        if resp.success <> 1 then failwith resp.message else order_response_of_raw resp
+      | Ok resp -> order_response_of_raw resp |> Result.ok_or_failwith
+      | Error _ -> failwith body_str
+    end
+
+  let close_position ?buf ~key ~secret symbol =
+    let data = [
+      "command", ["closeMarginPosition"];
+      "currencyPair", [symbol];
+    ]
+    in
+    let data_str, headers = sign ~key ~secret ~data in
+    Monitor.try_with_or_error begin fun () ->
+      Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+      Body.to_string body >>| fun body_str ->
+      let resp = Yojson.Safe.from_string ?buf body_str in
+      match order_response_raw_of_yojson resp with
+      | Ok resp -> order_response_of_raw resp |> Result.ok_or_failwith
       | Error _ -> failwith body_str
     end
 

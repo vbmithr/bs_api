@@ -150,7 +150,7 @@ let plnx key secret topics =
       | ["cancel"; id] ->
         let id = Int.of_string id in
         Rest.cancel ~key ~secret id >>| begin function
-        | Ok { success } -> info "canceled order %d: %d" id success
+        | Ok () -> info "canceled order %d OK" id
         | Error err -> error "%s" @@ Error.to_string_hum err
         end
       | [side; symbol; price; qty] ->
@@ -171,6 +171,11 @@ let plnx key secret topics =
         let id = Int.of_string id in
         let price = Int.of_string price in
         Rest.modify ~key ~secret ~price id >>| begin function
+        | Ok resp -> info "%s" (Rest.sexp_of_order_response resp |> Sexplib.Sexp.to_string)
+        | Error err -> error "%s" @@ Error.to_string_hum err
+        end
+      | ["close"; symbol] ->
+        Rest.close_position ~key ~secret symbol >>| begin function
         | Ok resp -> info "%s" (Rest.sexp_of_order_response resp |> Sexplib.Sexp.to_string)
         | Error err -> error "%s" @@ Error.to_string_hum err
         end
