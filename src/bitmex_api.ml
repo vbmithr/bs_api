@@ -277,7 +277,7 @@ module Ws = struct
     type typ = Message | Subscribe | Unsubscribe [@@deriving enum]
     type t = {
       typ: typ;
-      id: Uuid.t;
+      id: string;
       topic: string;
       payload: Yojson.Safe.json option;
     } [@@deriving create]
@@ -292,7 +292,7 @@ module Ws = struct
           in
           Result.return @@ create
             ~typ:(Option.value_exn (typ_of_enum typ))
-            ~id:(Uuid.of_string id)
+            ~id
             ~topic ?payload ()
         with _ -> Result.fail "MD.of_yojson"
       end
@@ -300,7 +300,7 @@ module Ws = struct
 
     let to_yojson { typ; id; topic; payload } =
       let payload = match payload with None -> [] | Some p -> [p] in
-      `List (`Int (typ_to_enum typ) :: `String (Uuid.to_string id) :: `String topic :: payload)
+      `List (`Int (typ_to_enum typ) :: `String id :: `String topic :: payload)
 
     let subscribe ~id ~topic = create Subscribe id topic ()
     let unsubscribe ~id ~topic = create Unsubscribe id topic ()
