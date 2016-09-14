@@ -525,6 +525,7 @@ let p1_p2_of_bitmex ~ord_type ~stopPx ~price = match ord_type with
 let string_of_stop_exec_inst = function
   | `MarkPrice -> "MarkPrice"
   | `LastPrice -> "LastPrice"
+  | `IndexPrice -> "IndexPrice"
 
 let price_fields_of_dtc ?p1 ?p2 ord_type =
   match ord_type with
@@ -546,12 +547,15 @@ let price_fields_of_dtc ?p1 ?p2 ord_type =
 let execInst_of_dtc ord_type tif stop_exec_inst =
   let sei_str = string_of_stop_exec_inst stop_exec_inst in
   let execInst = match ord_type with
-    | Dtc.OrderType.Stop | Market_if_touched | Stop_limit -> [sei_str]
-    | _ -> []
+    | Dtc.OrderType.Stop | Market_if_touched | Stop_limit -> Some sei_str
+    | _ -> None
   in
   match tif with
-  | Dtc.TimeInForce.All_or_none -> ["execInst", `String (String.concat ~sep:"," ("AllOrNone" :: execInst)); "displayQty", `Float 0.]
-  | _ -> List.map execInst ~f:(fun ei -> "execInst", `String ei)
+  | Dtc.TimeInForce.All_or_none -> [
+      "execInst", `String (Option.value_map execInst ~default:"AllOrNone" ~f:(fun ei -> "AllOrNone," ^ ei));
+      "displayQty", `Float 0.
+    ]
+  | _ -> Option.value_map execInst ~default:[] ~f:(fun ei -> ["execInst", `String ei])
 
 let update_action_of_string = function
   | "partial" -> OB.Partial
