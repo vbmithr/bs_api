@@ -86,7 +86,7 @@ end
 module Crypto = struct
   let gen_nonce = function
   | `Rest -> Time_ns.(now () |> to_int_ns_since_epoch) / 1_000_000_000 + 5
-  | `Ws -> Time_ns.(now () |> to_int_ns_since_epoch) / 1_000_000
+  | `Ws -> Time_ns.(now () |> to_int_ns_since_epoch) / 1_000
 
   let sign ?log ?(data="") ~secret ~verb ~endp kind =
     let verb_str = match verb with
