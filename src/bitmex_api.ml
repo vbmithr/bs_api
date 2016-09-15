@@ -153,6 +153,42 @@ module Rest = struct
     ("content-type", "application/json") :: List.Assoc.map query_params ~f:List.hd_exn
 
   module ApiKey = struct
+    type permission = [`Perm of string | `Dtc of string] [@@deriving sexp]
+
+    let perms_of_raw = function
+    | `String perm -> `Perm perm
+    | `List [`String "dtc"; `Assoc ["username", `String username]] -> `Dtc username
+    | #Yojson.Safe.json -> invalid_arg "perms_of_raw"
+
+    type entry_raw = {
+      id: string;
+      secret: string;
+      name: string;
+      nonce: string;
+      cidr: string;
+      permissions: Yojson.Safe.json list;
+      enabled: bool;
+      userid: int;
+      created: string;
+    } [@@deriving yojson]
+
+    type entry = {
+      id: string;
+      secret: string;
+      name: string;
+      nonce: string;
+      cidr: string;
+      permissions: permission list;
+      enabled: bool;
+      userid: int;
+      created: Time_ns.t;
+    } [@@deriving create, sexp]
+
+    let entry_of_raw ({ id; secret; name; nonce; cidr; permissions; enabled; userid; created }:entry_raw) =
+      let permissions = List.map permissions ~f:perms_of_raw in
+      let created = Time_ns.of_string created in
+      create_entry ~id ~secret ~name ~nonce ~cidr ~permissions ~enabled ~userid ~created ()
+
     let dtc ?buf ?log ?username ~testnet ~key ~secret () =
       let path = "/api/v1/apiKey/dtc/" ^ match username with None -> "all" | Some u -> "get" in
       let query = match username with None -> [] | Some u -> ["get", u] in
@@ -160,7 +196,10 @@ module Rest = struct
       let uri = Uri.with_query' uri query in
       let uri = Uri.with_path uri path in
       let headers = mk_headers ?log ~key ~secret `GET uri in
-      call ?buf ?log ~name:"position" ~f:(Client.get ~headers) uri
+      call ?buf ?log ~name:"position" ~f:(Client.get ~headers) uri >>| function
+      | Ok (`List entries) -> Ok (List.map entries ~f:(fun e -> entry_raw_of_yojson e |> Result.ok_or_failwith |> entry_of_raw))
+      | Ok json -> Error (Error.of_string (Yojson.Safe.to_string ?buf json))
+      | Error err -> Error err
   end
 
   module Position = struct

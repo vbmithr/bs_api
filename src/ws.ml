@@ -31,7 +31,7 @@ let bitmex key secret testnet md rest topics =
       match String.split s ~on:' ' with
       | ["dtc"] ->  begin BMEX.Rest.ApiKey.dtc ~buf ~testnet ~key ~secret () >>| function
         | Error err -> error "%s" @@ Error.to_string_hum err
-        | Ok json -> info "%s" @@ Yojson.Safe.to_string ~buf json
+        | Ok entries -> info "%s" (Sexplib.Std.sexp_of_list BMEX.Rest.ApiKey.sexp_of_entry entries |> Sexplib.Sexp.to_string);
         end
       | ["position"] -> begin BMEX.Rest.Position.position ~buf ~testnet ~key ~secret () >>| function
         | Error err -> error "%s" @@ Error.to_string_hum err
