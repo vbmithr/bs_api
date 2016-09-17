@@ -47,12 +47,18 @@ let get_tradeID = function
   | `String s -> Option.some @@ Int.of_string s
   | #Yojson.Safe.json -> invalid_arg "int_of_globalTradeID"
 
+let satoshis_of_string fstr =
+  let idx = String.index_exn fstr '.' in
+  String.blito ~src:fstr ~dst:fstr ~src_pos:0 ~dst_pos:1 ~src_len:idx ();
+  String.set fstr 0 '0';
+  Int.of_string fstr
+
 let trade_of_trade_raw { tradeID; date; typ; rate; amount } =
   let id = Option.value ~default:0 (get_tradeID tradeID) in
   let date = Time_ns.(add (of_string (date ^ "Z")) (Span.of_int_ns id)) in
   let typ = match typ with "buy" -> Dtc.Buy | "sell" -> Sell | _ -> invalid_arg "typ_of_string" in
-  let rate = Fn.compose satoshis_int_of_float_exn Float.of_string rate in
-  let amount = Fn.compose satoshis_int_of_float_exn Float.of_string amount in
+  let rate = satoshis_of_string rate in
+  let amount = satoshis_of_string amount in
   DB.create_trade date typ rate amount ()
 
 module Rest = struct
