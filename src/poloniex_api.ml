@@ -185,18 +185,18 @@ module Rest = struct
       ?(wait=Time_ns.Span.min_value)
       ?(from=Time_ns.now ())
       ?(down_to=Time_ns.epoch)
-      ?(buf=Bi_outbuf.create 4096)
+      ?buf
       symbol =
     let r, w = Pipe.create () in
     let rec inner from =
-      trades ?log ~buf ~stop:from symbol >>= function
+      trades ?log ?buf ~stop:from symbol >>= function
       | Error err ->
         maybe_error log "%s" @@ Error.to_string_hum err;
         Clock_ns.after wait >>= fun () ->
         inner from
       | Ok [] -> Pipe.close w; Deferred.unit
       | Ok (h :: t as ts) ->
-        Deferred.List.iter ts ~how:`Sequential ~f:(fun e -> Pipe.write w e) >>= fun () ->
+        Pipe.(transfer_id (of_list ts) w) >>= fun () ->
         Clock_ns.after wait >>= fun () ->
         if h.DB.ts < down_to then (Pipe.close w; Deferred.unit)
         else inner Time_ns.(sub h.DB.ts @@ Span.of_int_sec 1)
