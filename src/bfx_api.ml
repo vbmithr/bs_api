@@ -99,29 +99,19 @@ module Rest = struct
           ]
       in
       let uri = Uri.(with_query' (with_path base_uri @@ "/v1/trades/" ^ pair) q) in
-      maybe_debug log "GET %s %s %d %d" pair Time_ns.(to_string start) (int_of_ts start) count;
+      Option.iter log ~f:(fun log -> Log.debug log "GET %s %s %d %d" pair Time_ns.(to_string start) (int_of_ts start) count);
       Client.get uri >>= handle_rest_call >>| function
       | Error exn -> raise exn
       | Ok (`List ts) ->
-        let filter_map_f t =
-          try begin match Raw.of_yojson t with
-            | Ok raw -> Some (of_raw raw)
-            | Error msg ->
-              maybe_debug log "%s" msg;
-              invalid_arg msg
-          end
-          with exn ->
-            maybe_debug log "%s" (Exn.to_string exn);
-            None
-        in
-        List.rev_filter_map ts ~f:filter_map_f
+        let map_f t = t |> Raw.of_yojson |> Result.ok_or_failwith |> of_raw in
+        List.rev_map ts ~f:map_f
       | Ok #Yojson.Safe.json -> invalid_arg "Rest.Trades.get"
   end
 
   module Priv = struct
     let post_exn ?buf ?log ~key ~secret ~endp ~body () =
       let open Nocrypto in
-      maybe_debug log "-> %s" Yojson.Safe.(to_string body);
+      Option.iter log ~f:(fun log -> Log.debug  log "-> %s" Yojson.Safe.(to_string ?buf body));
       let uri = Uri.with_path base_uri endp in
       let nonce = Time_ns.(now () |> to_int63_ns_since_epoch) |> Int63.to_string in
       let payload =
@@ -144,7 +134,7 @@ module Rest = struct
       let body = Cohttp_async.Body.of_string body in
       Client.post ~headers ~body uri >>= fun (resp, body) ->
       Body.to_string body >>| fun body ->
-      maybe_debug log "<- %s" body;
+      Option.iter log ~f:(fun log -> Log.debug log "<- %s" body);
       Yojson.Safe.from_string ?buf body
 
     module Order = struct
@@ -595,13 +585,13 @@ module Ws = struct
       Monitor.handle_errors (fun () ->
           Pipe.iter ~continue_on_error:true to_ws ~f:begin fun ev ->
             let ev_str = (ev |> Ev.to_yojson |> Yojson.Safe.to_string) in
-            maybe_debug log "-> %s" ev_str;
+            Option.iter log ~f:(fun log -> Log.debug log "-> %s" ev_str);
             match !cur_ws_w with
             | None -> Deferred.unit
             | Some w -> Pipe.write_if_open w ev_str
           end
         )
-        (fun exn -> maybe_error log "%s" @@ Exn.to_string exn)
+        (fun exn -> Option.iter log ~f:(fun log -> Log.error log "%s" @@ Exn.to_string exn))
     end;
     let client_r, client_w = Pipe.create () in
     let tcp_fun s r w =
@@ -615,14 +605,14 @@ module Ws = struct
         Pipe.close_read ws_r;
         Deferred.all_unit [Reader.close r; Writer.close w]
       in
-      maybe_info log "[WS] connecting to %s" uri_str;
+      Option.iter log ~f:(fun log -> Log.info log "[WS] connecting to %s" uri_str);
       (* AUTH *)
       begin match auth with
       | None -> Deferred.unit
       | Some (key, secret) ->
         let auth = sign key secret in
         let auth_str = (auth |> auth_to_yojson |> Yojson.Safe.to_string) in
-        maybe_debug log "-> %s" auth_str;
+        Option.iter log ~f:(fun log -> Log.debug log "-> %s" auth_str);
         Pipe.write ws_w auth_str
       end >>= fun () ->
       Monitor.protect ~finally:cleanup (fun () -> Pipe.transfer ws_r client_w ~f:(Yojson.Safe.from_string ~buf))
@@ -630,12 +620,12 @@ module Ws = struct
     let rec loop () = begin
       Monitor.try_with_or_error ~name:"BFX.Ws.with_connection"
         (fun () -> Tcp.(with_connection (to_host_and_port host port) tcp_fun)) >>| function
-      | Ok () -> maybe_error log "[WS] connection to %s terminated" uri_str
-      | Error err -> maybe_error log "[WS] connection to %s raised %s" uri_str (Error.to_string_hum err)
+      | Ok () -> Option.iter log ~f:(fun log -> Log.error log "[WS] connection to %s terminated" uri_str)
+      | Error err -> Option.iter log ~f:(fun log -> Log.error  log "[WS] connection to %s raised %s" uri_str (Error.to_string_hum err))
     end >>= fun () ->
       if Pipe.is_closed client_r then Deferred.unit
       else begin
-        maybe_error log "[WS] restarting connection to %s" uri_str;
+        Option.iter log ~f:(fun log -> Log.error log "[WS] restarting connection to %s" uri_str);
         Clock_ns.after @@ Time_ns.Span.of_int_sec 10 >>= loop
       end
     in

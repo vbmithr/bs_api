@@ -97,7 +97,7 @@ module Crypto = struct
     in
     let nonce = gen_nonce kind in
     let nonce_str = Int.to_string nonce in
-    maybe_debug log "sign %s" nonce_str;
+    Option.iter log ~f:(fun log -> Log.debug log "sign %s" nonce_str);
     let prehash = verb_str ^ endp ^ nonce_str ^ data in
     match Hex.(of_cstruct Nocrypto.Hash.SHA256.(hmac ~key:secret Cstruct.(of_string prehash))) with `Hex sign ->
       nonce, sign
@@ -138,7 +138,7 @@ module Rest = struct
       end
       else if C.Code.is_server_error status_code then begin
         let status_code_str = (C.Code.sexp_of_status_code status |> Sexplib.Sexp.to_string_hum) in
-        maybe_error log "%s: %s" name status_code_str;
+        Option.iter log ~f:(fun log -> Log.error log "%s: %s" name status_code_str);
         Clock_ns.after span >>= fun () ->
         if try_id >= max_tries then failwithf "%s: %s" name status_code_str ()
         else inner_exn @@ succ try_id
@@ -215,7 +215,7 @@ module Rest = struct
       let body_str = Yojson.Safe.to_string ?buf @@ `Assoc ["orders", `List orders] in
       let body = Body.of_string body_str in
       let headers = mk_headers ?log ~key ~secret ~data:body_str `POST uri in
-      maybe_debug log "-> %s" body_str;
+      Option.iter log ~f:(fun log -> Log.debug log "-> %s" body_str);
       call ?buf ?log ~name:"submit" ~f:(Client.post ~chunked:false ~body ~headers) uri
 
     let update ?buf ?log ~testnet ~key ~secret orders =
@@ -223,7 +223,7 @@ module Rest = struct
       let body_str = Yojson.Safe.to_string ?buf @@ `Assoc ["orders", `List orders] in
       let body = Body.of_string body_str in
       let headers = mk_headers ?log ~key ~secret ~data:body_str `PUT uri in
-      maybe_debug log "-> %s" body_str;
+      Option.iter log ~f:(fun log -> Log.debug log "-> %s" body_str);
       call ?buf ?log ~name:"update" ~f:(Client.put ~chunked:false ~body ~headers) uri
 
     let cancel ?buf ?log ~testnet ~key ~secret orderID =
@@ -231,7 +231,7 @@ module Rest = struct
       let body_str = `Assoc ["orderID", `String Uuid.(to_string orderID)] |> Yojson.Safe.to_string in
       let body = Body.of_string body_str in
       let headers = mk_headers ?log ~key ~secret ~data:body_str `DELETE uri in
-      maybe_debug log "-> %s" body_str;
+      Option.iter log ~f:(fun log -> Log.debug log "-> %s" body_str);
       call ?buf ?log ~name:"cancel" ~f:(Client.delete ~chunked:false ~body ~headers) uri
 
     let cancel_all ?buf ?log ?symbol ?filter ~testnet ~key ~secret () =
@@ -246,7 +246,7 @@ module Rest = struct
       let body_str = Yojson.Safe.to_string ?buf body in
       let body = Body.of_string body_str in
       let headers = mk_headers ?log ~key ~secret ~data:body_str `DELETE uri in
-      maybe_debug log "-> %s" body_str;
+      Option.iter log ~f:(fun log -> Log.debug log "-> %s" body_str);
       call ?buf ?log ~name:"cancel_all" ~f:(Client.delete ~chunked:false ~body ~headers) uri
 
     let cancel_all_after ?buf ?log ~testnet ~key ~secret timeout =
@@ -254,7 +254,7 @@ module Rest = struct
       let body_str = Yojson.Safe.to_string ?buf @@ `Assoc ["timeout", `Int timeout] in
       let body = Body.of_string body_str in
       let headers = mk_headers ?log ~key ~secret ~data:body_str `POST uri in
-      maybe_debug log "-> %s" body_str;
+      Option.iter log ~f:(fun log -> Log.debug log "-> %s" body_str);
       call ?buf ?log ~name:"cancel_all_after" ~f:(Client.post ~chunked:false ~body ~headers) uri
   end
 end
@@ -393,11 +393,11 @@ module Ws = struct
       Monitor.handle_errors begin fun () ->
         Pipe.iter ~continue_on_error:true to_ws ~f:begin fun msg_json ->
           let msg_str = Yojson.Safe.to_string msg_json in
-          maybe_debug log "-> %s" msg_str;
+          Option.iter log ~f:(fun log -> Log.debug log "-> %s" msg_str);
           loop_write ws_w_mvar msg_str
         end
       end
-        (fun exn -> maybe_error log "%s" @@ Exn.to_string exn)
+        (fun exn -> Option.iter log ~f:(fun log -> Log.error log "%s" @@ Exn.to_string exn))
     end;
     let client_r, client_w = Pipe.create () in
     let cleanup r w ws_r ws_w =
@@ -410,18 +410,18 @@ module Ws = struct
       let ws_r, ws_w = Websocket_async.client_ez ?log ~heartbeat:(Time_ns.Span.of_int_sec 25) uri s r w in
       Mvar.set ws_w_mvar ws_w;
       Option.iter connected ~f:(fun c -> Mvar.set c ());
-      maybe_info log "[WS] connecting to %s" uri_str;
+      Option.iter log ~f:(fun log -> Log.info log "[WS] connecting to %s" uri_str);
       Monitor.protect ~finally:(fun () -> cleanup r w ws_r ws_w) (fun () -> Pipe.transfer ws_r client_w ~f:(Yojson.Safe.from_string ~buf))
     in
     let rec loop () = begin
       Monitor.try_with_or_error ~name:"with_connection" (fun () ->
           Tcp.(with_connection (to_host_and_port host port) tcp_fun)) >>| function
-      | Ok () -> maybe_error log "[WS] connection to %s terminated" uri_str;
-      | Error err -> maybe_error log "[WS] connection to %s raised %s" uri_str (Error.to_string_hum err)
+      | Ok () -> Option.iter log ~f:(fun log -> Log.error log "[WS] connection to %s terminated" uri_str);
+      | Error err -> Option.iter log ~f:(fun log -> Log.error log "[WS] connection to %s raised %s" uri_str (Error.to_string_hum err))
     end >>= fun () ->
       if Pipe.is_closed client_r then Deferred.unit
       else begin
-        maybe_error log "[WS] restarting connection to %s" uri_str;
+        Option.iter log ~f:(fun log -> Log.error log "[WS] restarting connection to %s" uri_str);
         Clock_ns.after @@ Time_ns.Span.of_int_sec 10 >>= loop
       end
     in
@@ -482,7 +482,7 @@ module Ws = struct
           Pipe.close_read ws_r;
           Deferred.all_unit [Reader.close r; Writer.close w]
         in
-        maybe_info log "[WS] connecting to %s" uri_str;
+        Option.iter log ~f:(fun log -> Log.info log "[WS] connecting to %s" uri_str);
         Monitor.protect ~finally:cleanup begin fun () ->
           Pipe.write ws_w subscribe_msg_str >>= fun () ->
           Pipe.transfer' ws_r client_w ~f:begin fun msgq ->
@@ -490,7 +490,7 @@ module Ws = struct
               Yojson.Safe.from_string ~buf msg_str |> evt_of_yojson |> function
               | Ok evt -> Some evt.data
               | Error msg ->
-                maybe_error log "%s: %s" msg msg_str;
+                Option.iter log ~f:(fun log -> Log.error log "%s: %s" msg msg_str);
                 None
             end
           end
@@ -499,12 +499,12 @@ module Ws = struct
       let rec loop () = begin
         Monitor.try_with_or_error ~name:"with_connection" (fun () ->
             Tcp.(with_connection (to_host_and_port host port) tcp_fun)) >>| function
-        | Ok () -> maybe_error log "[WS] connection to %s terminated" uri_str;
-        | Error err -> maybe_error log "[WS] connection to %s raised %s" uri_str (Error.to_string_hum err)
+        | Ok () -> Option.iter log ~f:(fun log -> Log.error log "[WS] connection to %s terminated" uri_str);
+        | Error err -> Option.iter log ~f:(fun log -> Log.error log "[WS] connection to %s raised %s" uri_str (Error.to_string_hum err))
       end >>= fun () ->
         if Pipe.is_closed client_r then Deferred.unit
         else begin
-          maybe_error log "[WS] restarting connection to %s" uri_str;
+          Option.iter log ~f:(fun log -> Log.error log "[WS] restarting connection to %s" uri_str);
           Clock_ns.after @@ Time_ns.Span.of_int_sec 10 >>= loop
         end
       in

@@ -169,11 +169,13 @@ module Rest = struct
       Body.to_string body >>| fun body_str ->
       match Yojson.Safe.from_string ?buf body_str with
       | `List trades ->
-        maybe_debug log "<- trades %s %s %s (%d trades)"
-          symbol
-          (Option.sexp_of_t Time_ns.sexp_of_t start |> Sexplib.Sexp.to_string)
-          (Option.sexp_of_t Time_ns.sexp_of_t stop |> Sexplib.Sexp.to_string)
-          (List.length trades);
+        Option.iter log ~f:begin fun log ->
+          Log.debug log "<- trades %s %s %s (%d trades)"
+            symbol
+            (Option.sexp_of_t Time_ns.sexp_of_t start |> Sexplib.Sexp.to_string)
+            (Option.sexp_of_t Time_ns.sexp_of_t stop |> Sexplib.Sexp.to_string)
+            (List.length trades)
+        end;
         List.rev_map trades ~f:begin fun json ->
           trade_raw_of_yojson json |> Result.ok_or_failwith |> trade_of_trade_raw
         end
@@ -191,7 +193,7 @@ module Rest = struct
     let rec inner from =
       trades ?log ?buf ~stop:from symbol >>= function
       | Error err ->
-        maybe_error log "%s" @@ Error.to_string_hum err;
+        Option.iter log ~f:(fun log -> Log.error log "%s" @@ Error.to_string_hum err);
         Clock_ns.after wait >>= fun () ->
         inner from
       | Ok [] -> Pipe.close w; Deferred.unit
@@ -720,14 +722,14 @@ module Ws = struct
       let nb_written = Wamp_msgpck.msg_to_msgpck msg |> Msgpck.StringBuf.write outbuf in
       let serialized_msg = Buffer.contents outbuf in
       Binary_packing.pack_unsigned_32_int_big_endian serialized_msg 0 nb_written;
-      maybe_debug log "-> %s" (Wamp.sexp_of_msg Msgpck.sexp_of_t msg |> Sexplib.Sexp.to_string);
+      Option.iter log ~f:(fun log -> Log.debug log "-> %s" (Wamp.sexp_of_msg Msgpck.sexp_of_t msg |> Sexplib.Sexp.to_string));
       Pipe.write w serialized_msg
     in
     let rec loop_write mvar msg =
       Mvar.value_available mvar >>= fun () ->
       let w = Mvar.peek_exn mvar in
       if Pipe.is_closed w then begin
-        maybe_error log "loop_write: Pipe to websocket closed";
+        Option.iter log ~f:(fun log -> Log.error log "loop_write: Pipe to websocket closed");
         Mvar.take mvar >>= fun _ ->
         loop_write mvar msg
       end
@@ -739,7 +741,7 @@ module Ws = struct
     Monitor.handle_errors begin fun () ->
       Pipe.iter ~continue_on_error:true to_ws ~f:(loop_write ws_w_mvar_ro)
     end
-      (fun exn -> maybe_error log "%s" @@ Exn.to_string exn);
+      (fun exn -> Option.iter log ~f:(fun log -> Log.error  log "%s" @@ Exn.to_string exn));
     let transfer_f q =
       let res = Queue.create () in
       let rec read_loop pos msg_str =
@@ -747,7 +749,7 @@ module Ws = struct
           let nb_read, msg = Msgpck.String.read ~pos:(pos+4) msg_str in
           match Wamp_msgpck.msg_of_msgpck msg with
           | Ok msg -> Queue.enqueue res msg; read_loop (pos+4+nb_read) msg_str
-          | Error msg -> maybe_error log "%s" msg
+          | Error msg -> Option.iter log ~f:(fun log -> Log.error log "%s" msg)
       in
       Queue.iter q ~f:(read_loop 0);
       return res
@@ -755,7 +757,7 @@ module Ws = struct
     let client_r, client_w = Pipe.create () in
     let process_ws r w =
       (* Initialize *)
-      maybe_info log "[WS] connected to %s" uri_str;
+      Option.iter log ~f:(fun log -> Log.info log "[WS] connected to %s" uri_str);
       let hello = Wamp_msgpck.(hello (Uri.of_string "realm1") [Subscriber]) in
       write_wamp w hello >>= fun () ->
       Pipe.transfer' r client_w transfer_f
@@ -777,12 +779,12 @@ module Ws = struct
     let rec loop () = begin
       Monitor.try_with_or_error ~name:"PNLX.Ws.open_connection"
         (fun () -> Tcp.(with_connection (to_host_and_port host port) tcp_fun)) >>| function
-      | Ok () -> maybe_error log "[WS] connection to %s terminated" uri_str
-      | Error err -> maybe_error log "[WS] connection to %s raised %s" uri_str (Error.to_string_hum err)
+      | Ok () -> Option.iter log ~f:(fun log -> Log.error log "[WS] connection to %s terminated" uri_str)
+      | Error err -> Option.iter log ~f:(fun log -> Log.error log "[WS] connection to %s raised %s" uri_str (Error.to_string_hum err))
     end >>= fun () ->
       if Pipe.is_closed client_r then Deferred.unit
       else begin
-        maybe_error log "[WS] restarting connection to %s" uri_str;
+        Option.iter log ~f:(fun log -> Log.error log "[WS] restarting connection to %s" uri_str);
         Clock_ns.after @@ Time_ns.Span.of_int_sec 10 >>=
         loop
       end
