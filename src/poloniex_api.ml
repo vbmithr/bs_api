@@ -47,12 +47,6 @@ let get_tradeID = function
   | `String s -> Option.some @@ Int.of_string s
   | #Yojson.Safe.json -> invalid_arg "int_of_globalTradeID"
 
-let satoshis_of_string fstr =
-  let idx = String.index_exn fstr '.' in
-  String.blito ~src:fstr ~dst:fstr ~src_pos:0 ~dst_pos:1 ~src_len:idx ();
-  String.set fstr 0 '0';
-  Int.of_string fstr
-
 let trade_of_trade_raw { tradeID; date; typ; rate; amount } =
   let id = Option.value ~default:0 (get_tradeID tradeID) in
   let date = Time_ns.(add (of_string (date ^ "Z")) (Span.of_int_ns id)) in
@@ -108,8 +102,8 @@ module Rest = struct
 
   let bids_asks_of_yojson side records =
     List.map records ~f:(function
-      | `List [`String price; `Int qty] -> DB.create_book_entry side (Fn.compose satoshis_int_of_float_exn Float.of_string price) (Fn.compose satoshis_int_of_float_exn Float.of_int qty) ()
-      | `List [`String price; `Float qty] -> DB.create_book_entry side (Fn.compose satoshis_int_of_float_exn Float.of_string price) (satoshis_int_of_float_exn qty) ()
+      | `List [`String price; `Int qty] -> DB.create_book_entry side (satoshis_of_string price) (qty * 100_000_000) ()
+      | `List [`String price; `Float qty] -> DB.create_book_entry side (satoshis_of_string price) (satoshis_int_of_float_exn qty) ()
       | #Yojson.Safe.json -> invalid_arg "books_of_yojson (record)")
 
   type book_raw = {
@@ -276,9 +270,9 @@ module Rest = struct
   } [@@deriving create, sexp]
 
   let balance_of_balance_raw br =
-    let on_orders = satoshis_int_of_float_exn @@ Float.of_string br.onOrders in
-    let available = satoshis_int_of_float_exn @@ Float.of_string br.available in
-    let btc_value = satoshis_int_of_float_exn @@ Float.of_string br.btcValue in
+    let on_orders = satoshis_of_string br.onOrders in
+    let available = satoshis_of_string br.available in
+    let btc_value = satoshis_of_string br.btcValue in
     create_balance ~available ~on_orders ~btc_value ()
 
   let balances ?buf ?(all=true) ~key ~secret () =
@@ -326,8 +320,7 @@ module Rest = struct
       | `Assoc balances -> List.map balances ~f:begin function
         | account, `Assoc bs ->
           account_of_string account, List.Assoc.map bs ~f:begin function
-          | `String bal ->
-            satoshis_int_of_float_exn @@ Float.of_string bal
+          | `String bal -> satoshis_of_string bal
           | json -> invarg json
           end
         | account, json -> invarg json
@@ -355,11 +348,11 @@ module Rest = struct
 
   let margin_account_summary_of_raw { totalValue; pl; lendingFees; netValue;
                                       totalBorrowedValue; currentMargin } =
-    let total_value = satoshis_int_of_float_exn @@ Float.of_string totalValue in
-    let pl = satoshis_int_of_float_exn @@ Float.of_string pl in
-    let lending_fees = satoshis_int_of_float_exn @@ Float.of_string lendingFees in
-    let net_value = satoshis_int_of_float_exn @@ Float.of_string netValue in
-    let total_borrowed_value = satoshis_int_of_float_exn @@ Float.of_string totalBorrowedValue in
+    let total_value = satoshis_of_string totalValue in
+    let pl = satoshis_of_string pl in
+    let lending_fees = satoshis_of_string lendingFees in
+    let net_value = satoshis_of_string netValue in
+    let total_borrowed_value = satoshis_of_string totalBorrowedValue in
     let current_margin = Float.of_string currentMargin in
     create_margin_account_summary ~total_value ~pl ~lending_fees ~net_value
       ~total_borrowed_value ~current_margin ()
@@ -413,7 +406,7 @@ module Rest = struct
     else
     let id = try Option.some @@ Int.of_string orderNumber with _ -> None in
     let amount_unfilled = if amountUnfilled <> "" then
-        Option.some @@ satoshis_int_of_float_exn @@ Float.of_string amountUnfilled
+        Option.some @@ satoshis_of_string amountUnfilled
       else None
     in
     let trades = fix_resultingTrades resultingTrades in
@@ -563,9 +556,9 @@ module Rest = struct
   let oo_of_oo_raw oo_raw =
     let id = Int.of_string oo_raw.orderNumber in
     let side = side_of_string oo_raw.typ in
-    let price = satoshis_int_of_float_exn @@ Float.of_string oo_raw.rate in
-    let qty = satoshis_int_of_float_exn @@ Float.of_string oo_raw.amount in
-    let starting_qty = satoshis_int_of_float_exn @@ Float.of_string oo_raw.startingAmount in
+    let price = satoshis_of_string oo_raw.rate in
+    let qty = satoshis_of_string oo_raw.amount in
+    let starting_qty = satoshis_of_string oo_raw.startingAmount in
     let ts = Time_ns.of_string (oo_raw.date ^ "Z") in
     let margin = oo_raw.margin in
     create_open_orders_resp ~id ~ts ~side ~price ~qty ~starting_qty ~margin ()
@@ -626,9 +619,9 @@ module Rest = struct
                              typ; category } =
     let id = Int.of_string tradeID in
     let ts = Time_ns.of_string @@ date ^ "Z" in
-    let price = satoshis_int_of_float_exn @@ Float.of_string rate in
-    let qty = satoshis_int_of_float_exn @@ Float.of_string amount in
-    let fee = satoshis_int_of_float_exn @@ Float.of_string fee in
+    let price = satoshis_of_string rate in
+    let qty = satoshis_of_string amount in
+    let fee = satoshis_of_string fee in
     let order_id = Int.of_string orderNumber in
     let side = side_of_string typ in
     let category = trade_category_of_string category in
@@ -677,13 +670,13 @@ module Rest = struct
   } [@@deriving create, sexp]
 
   let margin_position_of_raw { amount; total; basePrice; liquidationPrice; pl; lendingFees; typ } =
-    let price = satoshis_int_of_float_exn @@ Float.of_string basePrice in
-    let qty = satoshis_int_of_float_exn @@ Float.of_string amount in
-    let total = satoshis_int_of_float_exn @@ Float.of_string total in
-    let pl = satoshis_int_of_float_exn @@ Float.of_string pl in
-    let lending_fees = satoshis_int_of_float_exn @@ Float.of_string lendingFees in
+    let price = satoshis_of_string basePrice in
+    let qty = satoshis_of_string amount in
+    let total = satoshis_of_string total in
+    let pl = satoshis_of_string pl in
+    let lending_fees = satoshis_of_string lendingFees in
     let liquidation_price = match liquidationPrice with
-    | `String price -> Option.some @@ satoshis_int_of_float_exn @@ Float.of_string price
+    | `String price -> Option.some @@ satoshis_of_string price
     | #Yojson.Safe.json -> None
     in
     let side = match typ with | "long" -> Some Dtc.Buy | "short" -> Some Dtc.Sell | _ -> None in
@@ -852,8 +845,8 @@ module Ws = struct
       let amount = String.Map.find_exn msg "amount" |> Msgpck.to_string in
       let date = Time_ns.(add (of_string (date ^ "Z")) @@ Span.of_int_ns tradeID) in
       let side = match side with "buy" -> Dtc.Buy | "sell" -> Sell | _ -> invalid_arg "typ_of_string" in
-      let rate = Fn.compose satoshis_int_of_float_exn Float.of_string rate in
-      let amount = Fn.compose satoshis_int_of_float_exn Float.of_string amount in
+      let rate = satoshis_of_string rate in
+      let amount = satoshis_of_string amount in
       DB.create_trade date side rate amount ()
     with _ -> invalid_arg "trade_of_msgpck"
 
@@ -863,8 +856,8 @@ module Ws = struct
       let price = String.Map.find_exn msg "rate" |> Msgpck.to_string in
       let qty = String.Map.find msg "amount" |> Option.map ~f:Msgpck.to_string in
       let side = match side with "bid" -> Dtc.Buy | "ask" -> Sell | _ -> invalid_arg "book_of_book_raw" in
-      let price = Fn.compose satoshis_int_of_float_exn Float.of_string price in
-      let qty = Option.value_map qty ~default:0 ~f:(Fn.compose satoshis_int_of_float_exn Float.of_string) in
+      let price = satoshis_of_string price in
+      let qty = Option.value_map qty ~default:0 ~f:satoshis_of_string in
       DB.create_book_entry side price qty ()
     with _ -> invalid_arg "book_of_msgpck"
   end
