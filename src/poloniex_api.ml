@@ -351,8 +351,8 @@ module Rest = struct
   let margin_account_summary_of_raw { totalValue; pl; lendingFees; netValue;
                                       totalBorrowedValue; currentMargin } =
     let total_value = satoshis_of_string totalValue in
-    let pl = satoshis_of_string pl in
-    let lending_fees = satoshis_of_string lendingFees in
+    let pl = satoshis_int_of_float_exn @@ Float.of_string pl in
+    let lending_fees = satoshis_int_of_float_exn @@ Float.of_string lendingFees in
     let net_value = satoshis_of_string netValue in
     let total_borrowed_value = satoshis_of_string totalBorrowedValue in
     let current_margin = Float.of_string currentMargin in
