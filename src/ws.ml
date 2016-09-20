@@ -180,8 +180,8 @@ let plnx key secret topics =
         end
       | [side; symbol; price; qty] ->
         let side = match side with "buy" -> Dtc.Dtc.Buy | "sell" -> Sell | _ -> failwith "side" in
-        let price = Int.of_string price in
-        let qty = Int.of_string qty in
+        let price = satoshis_int_of_float_exn @@ Float.of_string price in
+        let qty = satoshis_int_of_float_exn @@ Float.of_string qty in
         if margin_enabled symbol then
           Rest.margin_order ~key ~secret ~symbol ~side ~price ~qty () >>| begin function
           | Ok resp -> info "%s" (Rest.sexp_of_order_response resp |> Sexplib.Sexp.to_string)
