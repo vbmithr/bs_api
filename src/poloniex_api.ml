@@ -392,9 +392,9 @@ module Rest = struct
   } [@@deriving create, sexp]
 
   type order_response = {
-    id: int option;
+    id: int;
     trades: trade_info list;
-    amount_unfilled: int option;
+    amount_unfilled: int;
   } [@@deriving create, sexp]
 
   let trade_info_of_resultingTrades tr =
@@ -406,14 +406,11 @@ module Rest = struct
   let order_response_of_raw { success; message; error; orderNumber; resultingTrades; amountUnfilled } =
     if success = 0 then Result.fail error
     else
-    let id = try Option.some @@ Int.of_string orderNumber with _ -> None in
-    let amount_unfilled = if amountUnfilled <> "" then
-        Option.some @@ satoshis_of_string amountUnfilled
-      else None
-    in
+    let id = Int.of_string orderNumber in
+    let amount_unfilled = if amountUnfilled = "" then 0 else satoshis_of_string amountUnfilled in
     let trades = fix_resultingTrades resultingTrades in
     let trades = List.map trades ~f:trade_info_of_resultingTrades in
-    Result.return @@ create_order_response ?id ~trades ?amount_unfilled ()
+    Result.return @@ create_order_response ~id ~trades ~amount_unfilled ()
 
   let order
       ?buf
