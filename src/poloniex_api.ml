@@ -242,10 +242,9 @@ module Rest = struct
 
   let make_sign () =
     let bigbuf = Bigstring.create 1024 in
-    let nonce = ref @@ Time_ns.(now () |> to_int_ns_since_epoch) / 1_000_000 in
     fun ~key ~secret ~data ->
-      let data = ("nonce", [Int.to_string !nonce]) :: data in
-      incr nonce;
+      let nonce = Time_ns.(now () |> to_int_ns_since_epoch) / 1_000 in
+      let data = ("nonce", [Int.to_string nonce]) :: data in
       let data_str = Uri.encoded_of_query data in
       let prehash = Cstruct.of_string ~allocator:(fun len -> Cstruct.of_bigarray bigbuf ~len) data_str in
       let `Hex signature = Nocrypto.Hash.SHA512.hmac ~key:secret prehash |> Hex.of_cstruct in
