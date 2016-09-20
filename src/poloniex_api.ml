@@ -670,12 +670,12 @@ module Rest = struct
 
   let margin_position_of_raw { amount; total; basePrice; liquidationPrice; pl; lendingFees; typ } =
     let price = satoshis_of_string basePrice in
-    let qty = satoshis_of_string amount in
-    let total = satoshis_of_string total in
-    let pl = satoshis_of_string pl in
-    let lending_fees = satoshis_of_string lendingFees in
+    let qty = satoshis_int_of_float_exn @@ Float.of_string amount in
+    let total = satoshis_int_of_float_exn @@ Float.of_string total in
+    let pl = satoshis_int_of_float_exn @@ Float.of_string pl in
+    let lending_fees = satoshis_int_of_float_exn @@ Float.of_string lendingFees in
     let liquidation_price = match liquidationPrice with
-    | `String price -> Option.some @@ satoshis_of_string price
+    | `String price -> Option.some @@ satoshis_int_of_float_exn @@ Float.of_string price
     | #Yojson.Safe.json -> None
     in
     let side = match typ with | "long" -> Some Dtc.Buy | "short" -> Some Dtc.Sell | _ -> None in
