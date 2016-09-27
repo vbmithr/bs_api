@@ -518,7 +518,7 @@ module Trade = struct
     symbol: string;
     timestamp: string;
     price: float;
-    size: int64;
+    size: int;
     side: string;
     tickDirection: (string option [@default None]);
     trdMatchID: (string option [@default None]);
