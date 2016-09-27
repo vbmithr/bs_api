@@ -8,6 +8,7 @@ PKG hex
 PKG bs_devkit
 PKG dtc
 PKG wamp.msgpck
+PKG jsonm
 S src
 S test
 B _build/**

@@ -12,4 +12,5 @@ true : bin_annot, safe_string, package(bytes), warn(-40)
        package(cohttp.async), \
        package(websocket.async), \
        package(wamp.msgpck), \
+       package(jsonm), \
        thread

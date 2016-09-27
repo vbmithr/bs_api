@@ -22,6 +22,7 @@ depends: [
   "websocket"
   "msgpck"
   "wamp"
+  "jsonm"
 ]
 depopts: []
 build:
