@@ -194,8 +194,9 @@ module Rest = struct
       don't_wait_for begin
         Monitor.try_with_or_error
           (fun () -> Pipe.fold bp ~init:("", []) ~f:(fold_trades decoder trades_w)) >>| function
-        | Ok _ -> ()
+        | Ok _ -> Pipe.close trades_w
         | Error err ->
+          Pipe.close trades_w;
           Option.iter log ~f:(fun log -> Log.error log "%s" (Error.to_string_hum err))
       end;
       trades_r
@@ -216,14 +217,12 @@ module Rest = struct
         Clock_ns.after wait >>= fun () ->
         inner from
       | Ok ts ->
-        Pipe.read ts >>= function
-        | `Eof -> (Pipe.close w; Deferred.unit)
-        | `Ok t ->
-          if t.ts < down_to then (Pipe.close w; Deferred.unit) else
-          Pipe.write w t >>= fun () ->
-          Pipe.(transfer_id ts w) >>= fun () ->
-          Clock_ns.after wait >>= fun () ->
-          inner Time_ns.(sub t.ts @@ Span.of_int_sec 1)
+        let oldest_ts = ref @@ Time_ns.max_value in
+        Pipe.(transfer ts w ~f:(fun t -> oldest_ts := t.ts; t)) >>= fun () ->
+        if !oldest_ts = Time_ns.max_value then (Pipe.close w; Deferred.unit)
+        else
+        Clock_ns.after wait >>= fun () ->
+        inner Time_ns.(sub !oldest_ts @@ Span.of_int_sec 1)
     in
     don't_wait_for @@ inner from;
     r
