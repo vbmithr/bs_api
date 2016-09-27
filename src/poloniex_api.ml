@@ -164,22 +164,41 @@ module Rest = struct
         map stop_sec ~f:(fun t -> "end", t);
       ]
     in
+    let fold_trades decoder trades_w (name, tmp) chunk =
+      Jsonm.Manual.src decoder chunk 0 @@ String.length chunk;
+      let rec decode name tmp =
+        match Jsonm.decode decoder with
+        | `Error err -> failwith @@ Format.asprintf "%a" Jsonm.pp_error err
+        | `Lexeme (`Float f) -> decode "" ((name, `Int (Float.to_int f))::tmp)
+        | `Lexeme (`String s) -> decode "" ((name, `String s)::tmp)
+        | `Lexeme (`Name name) -> decode name tmp
+        | `Lexeme `Oe ->
+          let trade = trade_raw_of_yojson @@ `Assoc tmp |>
+                      Result.ok_or_failwith |>
+                      trade_of_trade_raw
+          in
+          Pipe.write trades_w trade >>= fun () ->
+          decode "" []
+
+        | `Lexeme #Jsonm.lexeme -> decode name tmp
+        | `Await -> return (name, tmp)
+        | `End -> assert false
+      in
+      decode name tmp
+    in
     Monitor.try_with_or_error begin fun () ->
-      Client.get url >>= fun (resp, body) ->
-      Body.to_string body >>| fun body_str ->
-      match Yojson.Safe.from_string ?buf body_str with
-      | `List trades ->
-        Option.iter log ~f:begin fun log ->
-          Log.debug log "<- trades %s %s %s (%d trades)"
-            symbol
-            (Option.sexp_of_t Time_ns.sexp_of_t start |> Sexplib.Sexp.to_string)
-            (Option.sexp_of_t Time_ns.sexp_of_t stop |> Sexplib.Sexp.to_string)
-            (List.length trades)
-        end;
-        List.rev_map trades ~f:begin fun json ->
-          trade_raw_of_yojson json |> Result.ok_or_failwith |> trade_of_trade_raw
-        end
-      | #Yojson.Safe.json -> invalid_arg body_str
+      Client.get url >>| fun (resp, body) ->
+      let bp = Body.to_pipe body in
+      let decoder = Jsonm.decoder `Manual in
+      let trades_r, trades_w = Pipe.create () in
+      don't_wait_for begin
+        Monitor.try_with_or_error
+          (fun () -> Pipe.fold bp ~init:("", []) ~f:(fold_trades decoder trades_w)) >>| function
+        | Ok _ -> ()
+        | Error err ->
+          Option.iter log ~f:(fun log -> Log.error log "%s" (Error.to_string_hum err))
+      end;
+      trades_r
     end
 
   let all_trades
@@ -196,12 +215,15 @@ module Rest = struct
         Option.iter log ~f:(fun log -> Log.error log "%s" @@ Error.to_string_hum err);
         Clock_ns.after wait >>= fun () ->
         inner from
-      | Ok [] -> Pipe.close w; Deferred.unit
-      | Ok (h :: t as ts) ->
-        Pipe.(transfer_id (of_list ts) w) >>= fun () ->
-        Clock_ns.after wait >>= fun () ->
-        if h.DB.ts < down_to then (Pipe.close w; Deferred.unit)
-        else inner Time_ns.(sub h.DB.ts @@ Span.of_int_sec 1)
+      | Ok ts ->
+        Pipe.read ts >>= function
+        | `Eof -> (Pipe.close w; Deferred.unit)
+        | `Ok t ->
+          if t.ts < down_to then (Pipe.close w; Deferred.unit) else
+          Pipe.write w t >>= fun () ->
+          Pipe.(transfer_id ts w) >>= fun () ->
+          Clock_ns.after wait >>= fun () ->
+          inner Time_ns.(sub t.ts @@ Span.of_int_sec 1)
     in
     don't_wait_for @@ inner from;
     r
