@@ -153,15 +153,15 @@ module Rest = struct
       | #Yojson.Safe.json -> invalid_arg "books"
     end
 
-  let trades ?log ?buf ?start ?stop symbol =
+  let trades ?log ?from ?down_to symbol =
     let open Cohttp_async in
-    let start_sec = Option.map start ~f:(fun start -> Time_ns.to_int_ns_since_epoch start / 1_000_000_000 |> Int.to_string) in
-    let stop_sec = Option.map stop ~f:(fun stop -> Time_ns.to_int_ns_since_epoch stop / 1_000_000_000 |> Int.to_string) in
+    let from_sec = Option.map from ~f:(fun start -> Time_ns.to_int_ns_since_epoch start / 1_000_000_000 |> Int.to_string) in
+    let down_to_sec = Option.map down_to ~f:(fun stop -> Time_ns.to_int_ns_since_epoch stop / 1_000_000_000 |> Int.to_string) in
     let url = Uri.add_query_params' base_uri @@ List.filter_opt Option.[
         some ("command", "returnTradeHistory");
         some ("currencyPair", symbol);
-        map start_sec ~f:(fun t -> "start", t);
-        map stop_sec ~f:(fun t -> "end", t);
+        map down_to_sec ~f:(fun t -> "start", t);
+        map from_sec ~f:(fun t -> "end", t);
       ]
     in
     let fold_trades decoder trades_w (name, tmp) chunk =
@@ -173,9 +173,9 @@ module Rest = struct
         | `Lexeme (`String s) -> decode "" ((name, `String s)::tmp)
         | `Lexeme (`Name name) -> decode name tmp
         | `Lexeme `Oe ->
-          let trade = trade_raw_of_yojson @@ `Assoc tmp |>
-                      Result.ok_or_failwith |>
-                      trade_of_trade_raw
+          let trade = match trade_raw_of_yojson @@ `Assoc tmp with
+          | Error _ -> failwith (Yojson.Safe.to_string (`Assoc tmp))
+          | Ok trade -> trade_of_trade_raw trade
           in
           Pipe.write trades_w trade >>= fun () ->
           decode "" []
@@ -207,11 +207,10 @@ module Rest = struct
       ?(wait=Time_ns.Span.min_value)
       ?(from=Time_ns.now ())
       ?(down_to=Time_ns.epoch)
-      ?buf
       symbol =
     let r, w = Pipe.create () in
     let rec inner from =
-      trades ?log ?buf ~stop:from symbol >>= function
+      trades ?log ~from symbol >>= function
       | Error err ->
         Option.iter log ~f:(fun log -> Log.error log "%s" @@ Error.to_string_hum err);
         Clock_ns.after wait >>= fun () ->
@@ -219,7 +218,7 @@ module Rest = struct
       | Ok ts ->
         let oldest_ts = ref @@ Time_ns.max_value in
         Pipe.(transfer ts w ~f:(fun t -> oldest_ts := t.ts; t)) >>= fun () ->
-        if !oldest_ts = Time_ns.max_value then (Pipe.close w; Deferred.unit)
+        if !oldest_ts = Time_ns.max_value || Time_ns.(!oldest_ts < down_to) then (Pipe.close w; Deferred.unit)
         else
         Clock_ns.after wait >>= fun () ->
         inner Time_ns.(sub !oldest_ts @@ Span.of_int_sec 1)
