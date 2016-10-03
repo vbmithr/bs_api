@@ -154,7 +154,6 @@ module Rest = struct
     end
 
   let trades ?log ?from ?down_to symbol =
-    let open Cohttp_async in
     let from_sec = Option.map from ~f:(fun start -> Time_ns.to_int_ns_since_epoch start / 1_000_000_000 |> Int.to_string) in
     let down_to_sec = Option.map down_to ~f:(fun stop -> Time_ns.to_int_ns_since_epoch stop / 1_000_000_000 |> Int.to_string) in
     let url = Uri.add_query_params' base_uri @@ List.filter_opt Option.[
@@ -186,20 +185,11 @@ module Rest = struct
       in
       decode name tmp
     in
-    Monitor.try_with_or_error begin fun () ->
-      Client.get url >>| fun (resp, body) ->
-      let bp = Body.to_pipe body in
-      let decoder = Jsonm.decoder `Manual in
-      let trades_r, trades_w = Pipe.create () in
-      don't_wait_for begin
-        Monitor.try_with_or_error
-          (fun () -> Pipe.fold bp ~init:("", []) ~f:(fold_trades decoder trades_w)) >>| function
-        | Ok _ -> Pipe.close trades_w
-        | Error err ->
-          Pipe.close trades_w;
-          Option.iter log ~f:(fun log -> Log.error log "%s" (Error.to_string_hum err))
-      end;
-      trades_r
+    Monitor.try_with_or_error (fun () -> Client.get url) >>|
+    Or_error.map ~f:begin fun (resp, body) ->
+      Pipe.create_reader ~close_on_exception:false begin fun w ->
+        Deferred.ignore @@ Pipe.fold (Body.to_pipe body) ~init:("", []) ~f:(fold_trades (Jsonm.decoder `Manual) w)
+      end
     end
 
   let all_trades
@@ -208,23 +198,21 @@ module Rest = struct
       ?(from=Time_ns.now ())
       ?(down_to=Time_ns.epoch)
       symbol =
-    let r, w = Pipe.create () in
-    let rec inner from =
+    let rec inner from w =
       trades ?log ~from symbol >>= function
       | Error err ->
         Option.iter log ~f:(fun log -> Log.error log "%s" @@ Error.to_string_hum err);
         Clock_ns.after wait >>= fun () ->
-        inner from
+        inner from w
       | Ok ts ->
         let oldest_ts = ref @@ Time_ns.max_value in
         Pipe.(transfer ts w ~f:(fun t -> oldest_ts := t.ts; t)) >>= fun () ->
         if !oldest_ts = Time_ns.max_value || Time_ns.(!oldest_ts < down_to) then (Pipe.close w; Deferred.unit)
         else
         Clock_ns.after wait >>= fun () ->
-        inner Time_ns.(sub !oldest_ts @@ Span.of_int_sec 1)
+        inner Time_ns.(sub !oldest_ts @@ Span.of_int_sec 1) w
     in
-    don't_wait_for @@ inner from;
-    r
+    Pipe.create_reader ~close_on_exception:false (inner from);
 
   type currency = {
     id: int;
