@@ -609,9 +609,10 @@ let update_action_of_string = function
   | s -> invalid_argf "update_action_of_bitmex: %s" s ()
 
 let side_of_bmex = function
-  | "Buy" -> Ok Dtc.Buy
-  | "Sell" -> Ok Sell
-  | s -> Error s
+  | "Buy" -> Some Dtc.Buy
+  | "Sell" -> Some Sell
+  | "" -> None
+  | _ -> invalid_arg "side_of_bmex"
 
 let bmex_of_side = function
   | Dtc.Buy -> "Buy"
