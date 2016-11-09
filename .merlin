@@ -9,6 +9,7 @@ PKG bs_devkit
 PKG dtc
 PKG wamp.msgpck
 PKG jsonm
+FLG -w -40
 S src
 S test
 B _build/**
