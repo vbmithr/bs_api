@@ -124,7 +124,7 @@ module Rest = struct
     error: error_content
   } [@@deriving yojson]
 
-  let call ?buf ?log ?(span=Time_ns.Span.of_int_sec 1) ?(max_tries=3) ~name ~f uri =
+  let call ?extract_exn ?buf ?log ?(span=Time_ns.Span.of_int_sec 1) ?(max_tries=3) ~name ~f uri =
     let rec inner_exn try_id =
       f uri >>= fun (resp, body) ->
       Body.to_string body >>= fun body_str ->
@@ -145,7 +145,7 @@ module Rest = struct
       end
       else failwithf "%s: Unexpected HTTP return status %s" name (C.Code.sexp_of_status_code status |> Sexplib.Sexp.to_string_hum) ()
     in
-    Monitor.try_with_or_error (fun () -> inner_exn 0)
+    Monitor.try_with_or_error ?extract_exn (fun () -> inner_exn 0)
 
   let mk_headers ?log ?(data="") ~key ~secret verb uri =
     let query_params = Crypto.mk_query_params ?log ~data ~key ~secret `Rest verb uri in
