@@ -4,7 +4,7 @@
 open Topkg
 
 let () =
-  Pkg.describe "bs_api" @@ fun c ->
+  Pkg.describe "bs-api" @@ fun c ->
   Ok [
     Pkg.lib ~exts:Exts.library "src/bitmex_api";
     Pkg.lib ~exts:Exts.library "src/bfx_api";
