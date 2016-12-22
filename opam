@@ -15,7 +15,7 @@ depends: [
   "ocamlbuild" {build}
   "topkg" {build}
   "async_ssl"
-  "bs_devkit"
+  "bs-devkit"
   "nocrypto"
   "hex"
   "dtc"
