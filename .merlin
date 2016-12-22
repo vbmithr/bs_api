@@ -5,7 +5,7 @@ PKG cohttp.async
 PKG websocket
 PKG ppx_deriving_yojson
 PKG hex
-PKG bs_devkit
+PKG bs-devkit
 PKG dtc
 PKG wamp.msgpck
 PKG jsonm

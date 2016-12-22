@@ -164,7 +164,9 @@ module Rest = struct
       ]
     in
     let fold_trades decoder trades_w (name, tmp) chunk =
-      Jsonm.Manual.src decoder chunk 0 @@ String.length chunk;
+      let chunk_len = String.length chunk in
+      let chunk = Caml.Bytes.unsafe_of_string chunk in
+      Jsonm.Manual.src decoder chunk 0 chunk_len;
       let rec decode name tmp =
         match Jsonm.decode decoder with
         | `Error err -> failwith @@ Format.asprintf "%a" Jsonm.pp_error err
