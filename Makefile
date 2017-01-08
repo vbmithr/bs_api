@@ -1,6 +1,6 @@
 all:
-	./build lib-byte
-	./build ws.byte
+	./build lib-native
+	./build ws.native
 
 clean:
 	./build clean
