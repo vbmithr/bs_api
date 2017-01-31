@@ -18,6 +18,11 @@ module Instrument = struct
       ^ (if testnet && not index then "T" else "")
     in
     let tickSize = float_exn t "tickSize" in
+    let expiration_date = Option.map (string t "expiry") ~f:(fun time ->
+        Time_ns.(of_string time |>
+                 to_int_ns_since_epoch |>
+                 (fun t -> t / 1_000_000_000) |>
+                 Int32.of_int_exn)) in
     let open Dtc.SecurityDefinition in
     Response.create
       ~symbol
@@ -30,9 +35,7 @@ module Instrument = struct
       ~underlying_symbol:(string_exn t "underlyingSymbol")
       ~updates_bid_ask_only:false
       ~has_market_depth_data:(not index)
-      ?expiration_date:Option.(
-          map (string t "expiry")
-            ~f:(fun time -> Time.(of_string time |> to_epoch |> Int32.of_float)))
+      ?expiration_date
       ()
 end
 
