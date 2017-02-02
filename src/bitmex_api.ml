@@ -381,13 +381,13 @@ module Ws = struct
     in
     let scheme = Option.value_exn ~message:"no scheme in uri" Uri.(scheme uri) in
     let ws_w_mvar = Mvar.create () in
-    let rec loop_write mvar msg =
-      let mvar_ro = Mvar.read_only mvar in
-      Mvar.value_available mvar_ro >>= fun () ->
-      let w = Mvar.peek_exn mvar_ro in
+    let rec try_write msg =
+      let ws_w_mvar_ro = Mvar.read_only ws_w_mvar in
+      Mvar.value_available ws_w_mvar_ro >>= fun () ->
+      let w = Mvar.peek_exn ws_w_mvar_ro in
       if Pipe.is_closed w then begin
-        Mvar.take mvar_ro >>= fun _ ->
-        loop_write mvar msg
+        Mvar.take ws_w_mvar_ro >>= fun _ ->
+        try_write msg
       end
       else Pipe.write w msg
     in
@@ -397,15 +397,16 @@ module Ws = struct
         Pipe.iter ~continue_on_error:true to_ws ~f:begin fun msg_json ->
           let msg_str = Yojson.Safe.to_string msg_json in
           Option.iter log ~f:(fun log -> Log.debug log "-> %s" msg_str);
-          loop_write ws_w_mvar msg_str
+          try_write msg_str
         end
       end
         (fun exn -> Option.iter log ~f:(fun log -> Log.error log "%s" @@ Exn.to_string exn))
     end;
     let client_r, client_w = Pipe.create () in
-    let cleanup r w ws_r ws_w =
-      Pipe.close_read ws_r;
-      Deferred.all_unit [Reader.close r; Writer.close w]
+    let cleanup ws_r ws_w =
+      Pipe.close ws_w ;
+      Pipe.close_read ws_r ;
+      Deferred.unit
     in
     let tcp_fun s r w =
       Socket.(setopt s Opt.nodelay true);
@@ -414,7 +415,8 @@ module Ws = struct
       Mvar.set ws_w_mvar ws_w;
       Option.iter connected ~f:(fun c -> Mvar.set c ());
       Option.iter log ~f:(fun log -> Log.info log "[WS] connecting to %s" uri_str);
-      Monitor.protect ~finally:(fun () -> cleanup r w ws_r ws_w) (fun () -> Pipe.transfer ws_r client_w ~f:(Yojson.Safe.from_string ~buf))
+      Monitor.protect ~finally:(fun () -> cleanup ws_r ws_w) (fun () ->
+          Pipe.transfer ws_r client_w ~f:(Yojson.Safe.from_string ~buf))
     in
     let rec loop () = begin
       Monitor.try_with_or_error ~name:"with_connection" (fun () ->
