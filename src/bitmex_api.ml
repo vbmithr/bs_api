@@ -363,7 +363,14 @@ module Ws = struct
       (if testnet then testnet_uri else uri)
       (if md then "realtimemd" else "realtime")
 
-  let open_connection ?connected ?(buf=Bi_outbuf.create 4096) ?to_ws ?(query_params=[]) ?log ?auth ~testnet ~md ~topics () =
+  let open_connection
+      ?connected
+      ?(buf=Bi_outbuf.create 4096)
+      ?to_ws
+      ?(query_params=[])
+      ?log
+      ?auth
+      ~testnet ~md ~topics () =
     let uri = uri_of_opts testnet md in
     let auth_params = match auth with
       | None -> []
@@ -403,21 +410,26 @@ module Ws = struct
         (fun exn -> Option.iter log ~f:(fun log -> Log.error log "%s" @@ Exn.to_string exn))
     end;
     let client_r, client_w = Pipe.create () in
-    let cleanup ws_r ws_w =
+    let cleanup r w ws_r ws_w () =
       Pipe.close ws_w ;
       Pipe.close_read ws_r ;
-      Deferred.unit
+      Deferred.all_unit [Reader.close r ; Writer.close w ] ;
     in
     let tcp_fun s r w =
       Socket.(setopt s Opt.nodelay true);
-      (if scheme = "https" || scheme = "wss" then Conduit_async_ssl.ssl_connect r w else return (r, w)) >>= fun (r, w) ->
-      let ws_r, ws_w = Websocket_async.client_ez ?log ~heartbeat:(Time_ns.Span.of_int_sec 25) uri s r w in
-      Mvar.set ws_w_mvar ws_w;
-      Option.iter connected ~f:(fun c -> Mvar.set c ());
-      Option.iter log ~f:(fun log -> Log.info log "[WS] connecting to %s" uri_str);
-      Monitor.protect ~finally:(fun () -> cleanup ws_r ws_w) (fun () ->
-          Pipe.transfer ws_r client_w ~f:(Yojson.Safe.from_string ~buf))
-    in
+      (if scheme = "https" || scheme = "wss" then
+         Conduit_async_ssl.ssl_connect r w else
+       return (r, w)) >>= fun (r, w) ->
+      let ws_r, ws_w =
+        Websocket_async.client_ez ?log
+          ~heartbeat:(Time_ns.Span.of_int_sec 25) uri s r w in
+      let run () =
+        Mvar.set ws_w_mvar ws_w;
+        Option.iter connected ~f:(fun c -> Mvar.set c ());
+        Option.iter log ~f:(fun log -> Log.info log "[WS] connecting to %s" uri_str);
+        Pipe.transfer ws_r client_w ~f:(Yojson.Safe.from_string ~buf)
+      in
+      Monitor.protect run ~finally:(cleanup r w ws_r ws_w) in
     let rec loop () = begin
       Monitor.try_with_or_error ~name:"with_connection" (fun () ->
           Tcp.(with_connection (to_host_and_port host port) tcp_fun)) >>| function
@@ -479,13 +491,18 @@ module Ws = struct
       let tcp_fun s r w =
         Socket.(setopt s Opt.nodelay true);
         begin
-          if scheme = "https" || scheme = "wss" then Conduit_async_ssl.ssl_connect r w
-          else return (r, w)
+          if scheme = "https" || scheme = "wss" then
+            Conduit_async_ssl.ssl_connect r w
+          else
+          return (r, w)
         end >>= fun (r, w) ->
-        let ws_r, ws_w = Websocket_async.client_ez ?log ~heartbeat:(Time_ns.Span.of_int_sec 25) uri s r w in
+        let ws_r, ws_w =
+          Websocket_async.client_ez ?log
+            ~heartbeat:(Time_ns.Span.of_int_sec 25) uri s r w in
         let cleanup () =
-          Pipe.close_read ws_r;
-          Deferred.all_unit [Reader.close r; Writer.close w]
+          Pipe.close ws_w ;
+          Pipe.close_read ws_r ;
+          Deferred.all_unit [ Reader.close r ; Writer.close w ]
         in
         Option.iter log ~f:(fun log -> Log.info log "[WS] connecting to %s" uri_str);
         Monitor.protect ~finally:cleanup begin fun () ->
