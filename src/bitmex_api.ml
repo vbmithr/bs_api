@@ -407,10 +407,12 @@ module Ws = struct
           try_write msg_str
         end
       end
-        (fun exn -> Option.iter log ~f:(fun log -> Log.error log "%s" @@ Exn.to_string exn))
+        (fun exn -> Option.iter log ~f:(fun log ->
+             Log.error log "%s" @@ Exn.to_string exn))
     end;
     let client_r, client_w = Pipe.create () in
     let cleanup r w ws_r ws_w () =
+      Option.iter log ~f:(fun log -> Log.debug log "[WS] cleanup") ;
       Pipe.close ws_w ;
       Pipe.close_read ws_r ;
       Deferred.all_unit [Reader.close r ; Writer.close w ] ;
@@ -426,19 +428,24 @@ module Ws = struct
       let run () =
         Mvar.set ws_w_mvar ws_w;
         Option.iter connected ~f:(fun c -> Mvar.set c ());
-        Option.iter log ~f:(fun log -> Log.info log "[WS] connecting to %s" uri_str);
+        Option.iter log ~f:(fun log ->
+            Log.info log "[WS] connecting to %s" uri_str);
         Pipe.transfer ws_r client_w ~f:(Yojson.Safe.from_string ~buf)
       in
       Monitor.protect run ~finally:(cleanup r w ws_r ws_w) in
     let rec loop () = begin
       Monitor.try_with_or_error ~name:"with_connection" (fun () ->
           Tcp.(with_connection (to_host_and_port host port) tcp_fun)) >>| function
-      | Ok () -> Option.iter log ~f:(fun log -> Log.error log "[WS] connection to %s terminated" uri_str);
-      | Error err -> Option.iter log ~f:(fun log -> Log.error log "[WS] connection to %s raised %s" uri_str (Error.to_string_hum err))
+      | Ok () -> Option.iter log ~f:(fun log ->
+          Log.error log "[WS] connection to %s terminated" uri_str);
+      | Error err -> Option.iter log ~f:(fun log ->
+          Log.error log "[WS] connection to %s raised %s"
+            uri_str (Error.to_string_hum err))
     end >>= fun () ->
       if Pipe.is_closed client_r then Deferred.unit
       else begin
-        Option.iter log ~f:(fun log -> Log.error log "[WS] restarting connection to %s" uri_str);
+        Option.iter log ~f:(fun log ->
+            Log.error log "[WS] restarting connection to %s" uri_str);
         Clock_ns.after @@ Time_ns.Span.of_int_sec 10 >>= loop
       end
     in
