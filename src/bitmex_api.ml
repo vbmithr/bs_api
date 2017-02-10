@@ -411,31 +411,39 @@ module Ws = struct
              Log.error log "%s" @@ Exn.to_string exn))
     end;
     let client_r, client_w = Pipe.create () in
-    let cleanup r w ws_r ws_w () =
-      Option.iter log ~f:(fun log -> Log.debug log "[WS] cleanup") ;
+    let cleanup r w ws_r ws_w =
+      Option.iter log ~f:(fun log ->
+          Log.debug log "[WS] post-disconnection cleanup") ;
       Pipe.close ws_w ;
       Pipe.close_read ws_r ;
       Deferred.all_unit [Reader.close r ; Writer.close w ] ;
     in
     let tcp_fun s r w =
+      Option.iter log ~f:(fun log ->
+          Log.info log "[WS] connecting to %s" uri_str);
       Socket.(setopt s Opt.nodelay true);
       (if scheme = "https" || scheme = "wss" then
          Conduit_async_ssl.ssl_connect r w else
-       return (r, w)) >>= fun (r, w) ->
+       return (r, w)) >>= fun (ssl_r, ssl_w) ->
       let ws_r, ws_w =
         Websocket_async.client_ez ?log
-          ~heartbeat:(Time_ns.Span.of_int_sec 25) uri s r w in
-      let run () =
-        Mvar.set ws_w_mvar ws_w;
-        Option.iter connected ~f:(fun c -> Mvar.set c ());
-        Option.iter log ~f:(fun log ->
-            Log.info log "[WS] connecting to %s" uri_str);
-        Pipe.transfer ws_r client_w ~f:(Yojson.Safe.from_string ~buf)
-      in
-      Monitor.protect run ~finally:(cleanup r w ws_r ws_w) in
+          ~heartbeat:(Time_ns.Span.of_int_sec 25) uri s ssl_r ssl_w in
+      don't_wait_for begin
+        Deferred.all_unit
+          [ Reader.close_finished r ; Writer.close_finished w ] >>= fun () ->
+        cleanup ssl_r ssl_w ws_r ws_w
+      end ;
+      Mvar.set ws_w_mvar ws_w;
+      Option.iter connected ~f:(fun c -> Mvar.set c ());
+      Pipe.transfer ws_r client_w ~f:(Yojson.Safe.from_string ~buf)
+    in
     let rec loop () = begin
-      Monitor.try_with_or_error ~name:"with_connection" (fun () ->
-          Tcp.(with_connection (to_host_and_port host port) tcp_fun)) >>| function
+      Monitor.try_with_or_error
+        ~name:"with_connection"
+        ~extract_exn:false
+        begin fun () ->
+          Tcp.(with_connection (to_host_and_port host port) tcp_fun)
+        end >>| function
       | Ok () -> Option.iter log ~f:(fun log ->
           Log.error log "[WS] connection to %s terminated" uri_str);
       | Error err -> Option.iter log ~f:(fun log ->
@@ -443,11 +451,7 @@ module Ws = struct
             uri_str (Error.to_string_hum err))
     end >>= fun () ->
       if Pipe.is_closed client_r then Deferred.unit
-      else begin
-        Option.iter log ~f:(fun log ->
-            Log.error log "[WS] restarting connection to %s" uri_str);
-        Clock_ns.after @@ Time_ns.Span.of_int_sec 10 >>= loop
-      end
+      else Clock_ns.after @@ Time_ns.Span.of_int_sec 10 >>= loop
     in
     don't_wait_for @@ loop ();
     client_r
