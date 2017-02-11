@@ -773,24 +773,42 @@ module Ws = struct
       begin
         if scheme = "https" || scheme = "wss" then Conduit_async_ssl.ssl_connect r w
         else return (r, w)
-      end >>= fun (r, w) ->
-      let extra_headers = Cohttp.Header.init_with "Sec-Websocket-Protocol" "wamp.2.msgpack.batched" in
+      end >>= fun (ssl_r, ssl_w) ->
+      let extra_headers =
+        Cohttp.Header.init_with "Sec-Websocket-Protocol" "wamp.2.msgpack.batched" in
       let ws_r, ws_w = Websocket_async.client_ez ?log:log_ws
-          ~opcode:Binary ~extra_headers ~heartbeat uri s r w
+          ~opcode:Binary ~extra_headers ~heartbeat uri s ssl_r ssl_w
       in
-      Mvar.set ws_w_mvar ws_w;
-      let cleanup () = Deferred.all_unit [Reader.close r; Writer.close w] in
-      Monitor.protect ~name:"process_ws" ~finally:cleanup (fun () -> process_ws ws_r ws_w)
+      let cleanup r w ws_r ws_w =
+        Pipe.close_read ws_r ;
+        Pipe.close ws_w ;
+        Deferred.all_unit [
+          Reader.close r ;
+          Writer.close w ;
+        ]
+      in
+      don't_wait_for begin
+        Deferred.all_unit
+          [ Reader.close_finished r ; Writer.close_finished w ] >>= fun () ->
+        cleanup ssl_r ssl_w ws_r ws_w
+      end ;
+      Mvar.set ws_w_mvar ws_w ;
+      process_ws ws_r ws_w
     in
     let rec loop () = begin
       Monitor.try_with_or_error ~name:"PNLX.Ws.open_connection"
         (fun () -> Tcp.(with_connection (to_host_and_port host port) tcp_fun)) >>| function
-      | Ok () -> Option.iter log ~f:(fun log -> Log.error log "[WS] connection to %s terminated" uri_str)
-      | Error err -> Option.iter log ~f:(fun log -> Log.error log "[WS] connection to %s raised %s" uri_str (Error.to_string_hum err))
+      | Ok () ->
+        Option.iter log ~f:(fun log ->
+            Log.error log "[WS] connection to %s terminated" uri_str)
+      | Error err ->
+        Option.iter log ~f:(fun log ->
+            Log.error log "[WS] connection to %s raised %s" uri_str (Error.to_string_hum err))
     end >>= fun () ->
       if Pipe.is_closed client_r then Deferred.unit
       else begin
-        Option.iter log ~f:(fun log -> Log.error log "[WS] restarting connection to %s" uri_str);
+        Option.iter log ~f:(fun log ->
+            Log.error log "[WS] restarting connection to %s" uri_str);
         Clock_ns.after @@ Time_ns.Span.of_int_sec 10 >>=
         loop
       end
