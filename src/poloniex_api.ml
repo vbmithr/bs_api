@@ -4,6 +4,24 @@ open Async.Std
 open Dtc
 open Bs_devkit.Core
 
+module Msgpck_sexp = struct
+  type t = Msgpck.t =
+    | Nil
+    | Bool of bool
+    | Int of int
+    | Uint32 of int32
+    | Int32 of int32
+    | Uint64 of int64
+    | Int64 of int64
+    | Float32 of int32
+    | Float of float
+    | String of string
+    | Bytes of string
+    | Ext of int * string
+    | List of t list
+    | Map of (t * t) list [@@deriving sexp]
+end
+
 let margin_enabled = function
 | "BTC_XMR"
 | "BTC_ETH"
@@ -728,7 +746,7 @@ module Ws = struct
       let nb_written = Wamp_msgpck.msg_to_msgpck msg |> Msgpck.StringBuf.write outbuf in
       let serialized_msg = Buffer.contents outbuf in
       Binary_packing.pack_unsigned_32_int_big_endian serialized_msg 0 nb_written;
-      Option.iter log ~f:(fun log -> Log.debug log "-> %s" (Wamp.sexp_of_msg Msgpck.sexp_of_t msg |> Sexplib.Sexp.to_string));
+      (* Option.iter log ~f:(fun log -> Log.debug log "-> %s" (Wamp.sexp_of_msg Msgpck.sexp_of_t msg |> Sexplib.Sexp.to_string)); *)
       Pipe.write w serialized_msg
     in
     let rec loop_write mvar msg =

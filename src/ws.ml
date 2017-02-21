@@ -221,11 +221,11 @@ let plnx key secret topics =
     | Wamp.Welcome _ as msg ->
       PLNX.Ws.Msgpck.subscribe to_ws_w topics >>| fun _req_ids ->
       msg |> Wamp_msgpck.msg_to_msgpck |>
-      Msgpck.sexp_of_t |> fun msg_str ->
+      Msgpck_sexp.sexp_of_t |> fun msg_str ->
       Option.some @@ Sexplib.Sexp.to_string_hum msg_str ^ "\n";
     | msg ->
       msg |> Wamp_msgpck.msg_to_msgpck |>
-      Msgpck.sexp_of_t |> fun msg_str ->
+      Msgpck_sexp.sexp_of_t |> fun msg_str ->
       return @@ Option.some @@ Sexplib.Sexp.to_string_hum msg_str ^ "\n";
     end
   in
