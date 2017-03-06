@@ -1,5 +1,5 @@
-open Core.Std
-open Async.Std
+open Core
+open Async
 
 open Dtc
 open Bs_devkit.Core
@@ -311,14 +311,16 @@ module Ws = struct
     | Error of error
     | Update of update
 
-  let msg_of_yojson = function
-  | (`Assoc fields) as json ->
-    if List.Assoc.mem fields "info" && List.Assoc.mem fields "version" then Welcome
-    else if List.Assoc.mem fields "error" then Error (error_of_yojson json |> Result.ok_or_failwith)
-    else if List.Assoc.mem fields "success" then Ok (response_of_yojson json |> Result.ok_or_failwith)
-    else if List.Assoc.mem fields "table" then Update (update_of_yojson json |> Result.ok_or_failwith)
-    else invalid_argf "Ws.msg_of_yojson: %s" Yojson.Safe.(to_string json) ()
-  | #Yojson.Safe.json as json -> invalid_argf "Ws.msg_of_yojson: %s" Yojson.Safe.(to_string json) ()
+  let msg_of_yojson json =
+    let equal = String.equal in
+    match json with
+    | (`Assoc fields) as json ->
+      if List.Assoc.(mem ~equal fields "info" && mem ~equal fields "version") then Welcome
+      else if List.Assoc.mem ~equal fields "error" then Error (error_of_yojson json |> Result.ok_or_failwith)
+      else if List.Assoc.mem ~equal fields "success" then Ok (response_of_yojson json |> Result.ok_or_failwith)
+      else if List.Assoc.mem ~equal fields "table" then Update (update_of_yojson json |> Result.ok_or_failwith)
+      else invalid_argf "Ws.msg_of_yojson: %s" Yojson.Safe.(to_string json) ()
+    | #Yojson.Safe.json as json -> invalid_argf "Ws.msg_of_yojson: %s" Yojson.Safe.(to_string json) ()
 
   module MD = struct
     type typ = Message | Subscribe | Unsubscribe [@@deriving enum]

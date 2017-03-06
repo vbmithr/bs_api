@@ -1,5 +1,5 @@
-open Core.Std
-open Async.Std
+open Core
+open Async
 open Log.Global
 
 open Bs_devkit.Core
@@ -11,7 +11,7 @@ let default_cfg = Filename.concat (Option.value_exn (Sys.getenv "HOME")) ".virtu
 let find_auth cfg exchange =
   let cfg_json = Yojson.Safe.from_file cfg in
   let cfg = Result.ok_or_failwith @@ Cfg.of_yojson cfg_json in
-  let { Cfg.key; secret } = List.Assoc.find_exn cfg exchange in
+  let { Cfg.key; secret } = List.Assoc.find_exn ~equal:String.equal cfg exchange in
   key, Cstruct.of_string secret
 
 let base_spec =
@@ -140,7 +140,7 @@ let plnx key secret topics =
         | Error err -> error "%s" @@ Error.to_string_hum err
         | Ok resp ->
           info "found %d balances" @@ List.length resp;
-          match List.Assoc.find resp currency with
+          match List.Assoc.find ~equal:String.equal resp currency with
         | Some b -> info "%s: %s" currency (Rest.sexp_of_balance b |> Sexplib.Sexp.to_string)
         | None -> ()
         end

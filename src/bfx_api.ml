@@ -1,5 +1,5 @@
-open Core.Std
-open Async.Std
+open Core
+open Async
 
 open Dtc.Dtc
 open Bs_devkit.Core
@@ -286,13 +286,15 @@ module Ws = struct
 
     let create ~name ~fields () = { name; fields = String.Map.of_alist_exn fields }
 
-    let of_yojson = function
-    | `Assoc fields when List.Assoc.mem fields "event" ->
-      create
-        ~name:List.Assoc.(find_exn fields "event" |> Yojson.Safe.to_basic |> Yojson.Basic.Util.to_string)
-        ~fields:List.Assoc.(remove fields "event")
-        () |> Result.return
-    | #Yojson.Safe.json as s -> Result.failf "%s" @@ Yojson.Safe.to_string s
+    let of_yojson json =
+      let equal = String.equal in
+      match json with
+      | `Assoc fields when List.Assoc.mem ~equal fields "event" ->
+        create
+          ~name:List.Assoc.(find_exn ~equal fields "event" |> Yojson.Safe.to_basic |> Yojson.Basic.Util.to_string)
+          ~fields:List.Assoc.(remove ~equal fields "event")
+          () |> Result.return
+      | #Yojson.Safe.json as s -> Result.failf "%s" @@ Yojson.Safe.to_string s
 
     let to_yojson { name; fields } =
       `Assoc (("event", `String name) :: String.Map.(to_alist fields))
