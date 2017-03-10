@@ -3,7 +3,9 @@ PKG core
 PKG async
 PKG cohttp.async
 PKG websocket
+PKG ppx_deriving.std
 PKG ppx_deriving_yojson
+PKG ppx_sexp_conv
 PKG hex
 PKG bs-devkit
 PKG dtc

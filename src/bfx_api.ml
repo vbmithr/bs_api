@@ -2,7 +2,7 @@ open Core
 open Async
 
 open Dtc.Dtc
-open Bs_devkit.Core
+open Bs_devkit
 
 let exchange = "BITFINEX"
 

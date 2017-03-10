@@ -2,7 +2,7 @@ open Core
 open Async
 
 open Dtc
-open Bs_devkit.Core
+open Bs_devkit
 
 module Msgpck_sexp = struct
   type t = Msgpck.t =
@@ -67,11 +67,11 @@ let get_tradeID = function
 
 let trade_of_trade_raw { tradeID; date; typ; rate; amount } =
   let id = Option.value ~default:0 (get_tradeID tradeID) in
-  let date = Time_ns.(add (of_string (date ^ "Z")) (Span.of_int_ns id)) in
-  let typ = match typ with "buy" -> Dtc.Buy | "sell" -> Sell | _ -> invalid_arg "typ_of_string" in
-  let rate = satoshis_of_string rate in
-  let amount = satoshis_of_string amount in
-  DB.create_trade date typ rate amount ()
+  let ts = Time_ns.(add (of_string (date ^ "Z")) (Span.of_int_ns id)) in
+  let side = match typ with "buy" -> Dtc.Buy | "sell" -> Sell | _ -> invalid_arg "typ_of_string" in
+  let price = satoshis_of_string rate in
+  let qty = satoshis_of_string amount in
+  DB.{ ts ; side ; price ; qty }
 
 module Rest = struct
   open Cohttp_async
@@ -120,8 +120,10 @@ module Rest = struct
 
   let bids_asks_of_yojson side records =
     List.map records ~f:(function
-      | `List [`String price; `Int qty] -> DB.create_book_entry side (satoshis_of_string price) (qty * 100_000_000) ()
-      | `List [`String price; `Float qty] -> DB.create_book_entry side (satoshis_of_string price) (satoshis_int_of_float_exn qty) ()
+      | `List [`String price; `Int qty] ->
+        DB.{ side ; price = satoshis_of_string price ; qty = qty * 100_000_000 }
+      | `List [`String price; `Float qty] ->
+        DB.{ side ; price = satoshis_of_string price ; qty = satoshis_int_of_float_exn qty }
       | #Yojson.Safe.json -> invalid_arg "books_of_yojson (record)")
 
   type book_raw = {
@@ -887,11 +889,11 @@ module Ws = struct
       let side = String.Map.find_exn msg "type" |> Msgpck.to_string in
       let rate = String.Map.find_exn msg "rate" |> Msgpck.to_string in
       let amount = String.Map.find_exn msg "amount" |> Msgpck.to_string in
-      let date = Time_ns.(add (of_string (date ^ "Z")) @@ Span.of_int_ns tradeID) in
+      let ts = Time_ns.(add (of_string (date ^ "Z")) @@ Span.of_int_ns tradeID) in
       let side = match side with "buy" -> Dtc.Buy | "sell" -> Sell | _ -> invalid_arg "typ_of_string" in
-      let rate = satoshis_of_string rate in
-      let amount = satoshis_of_string amount in
-      DB.create_trade date side rate amount ()
+      let price = satoshis_of_string rate in
+      let qty = satoshis_of_string amount in
+      DB.{ ts ; side ; price ; qty }
     with _ -> invalid_arg "trade_of_msgpck"
 
     let book_of_msgpck msg = try
@@ -902,7 +904,7 @@ module Ws = struct
       let side = match side with "bid" -> Dtc.Buy | "ask" -> Sell | _ -> invalid_arg "book_of_book_raw" in
       let price = satoshis_of_string price in
       let qty = Option.value_map qty ~default:0 ~f:satoshis_of_string in
-      DB.create_book_entry side price qty ()
+      DB.{ side ; price ; qty }
     with _ -> invalid_arg "book_of_msgpck"
   end
 
@@ -939,6 +941,6 @@ module Ws = struct
       let side = match typ with "bid" -> Dtc.Buy | "ask" -> Sell | _ -> invalid_arg "book_of_book_raw" in
       let price = Fn.compose satoshis_int_of_float_exn Float.of_string rate in
       let qty = Option.value_map amount ~default:0 ~f:(Fn.compose satoshis_int_of_float_exn Float.of_string) in
-      DB.create_book_entry side price qty ()
+      DB.{ side ; price ; qty }
   end
 end

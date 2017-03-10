@@ -2,15 +2,15 @@ open Core
 open Async
 open Log.Global
 
-open Bs_devkit.Core
+open Bs_devkit
 module BMEX = Bitmex_api
 module BFX = Bfx_api
 module PLNX = Poloniex_api
 
 let default_cfg = Filename.concat (Option.value_exn (Sys.getenv "HOME")) ".virtu"
 let find_auth cfg exchange =
-  let cfg_json = Yojson.Safe.from_file cfg in
-  let cfg = Result.ok_or_failwith @@ Cfg.of_yojson cfg_json in
+  let cfg_sexp = Sexplib.Sexp.of_string cfg in
+  let cfg = Cfg.t_of_sexp cfg_sexp in
   let { Cfg.key; secret } = List.Assoc.find_exn ~equal:String.equal cfg exchange in
   key, Cstruct.of_string secret
 

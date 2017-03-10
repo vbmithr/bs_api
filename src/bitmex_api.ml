@@ -2,7 +2,7 @@ open Core
 open Async
 
 open Dtc
-open Bs_devkit.Core
+open Bs_devkit
 
 let uri = Uri.of_string "https://www.bitmex.com"
 let testnet_uri = Uri.of_string "https://testnet.bitmex.com"
