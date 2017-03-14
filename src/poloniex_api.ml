@@ -173,7 +173,7 @@ module Rest = struct
       | #Yojson.Safe.json -> invalid_arg "books"
     end
 
-  let trades ?log ?from ?down_to symbol =
+  let trades ?(decoder=Jsonm.decoder `Manual) ?log ?from ?down_to symbol =
     let from_sec = Option.map from ~f:(fun start -> Time_ns.to_int_ns_since_epoch start / 1_000_000_000 |> Int.to_string) in
     let down_to_sec = Option.map down_to ~f:(fun stop -> Time_ns.to_int_ns_since_epoch stop / 1_000_000_000 |> Int.to_string) in
     let url = Uri.add_query_params' base_uri @@ List.filter_opt Option.[
@@ -183,7 +183,7 @@ module Rest = struct
         map from_sec ~f:(fun t -> "end", t);
       ]
     in
-    let fold_trades decoder trades_w (name, tmp) chunk =
+    let fold_trades trades_w (name, tmp) chunk =
       let chunk_len = String.length chunk in
       let chunk = Caml.Bytes.unsafe_of_string chunk in
       Jsonm.Manual.src decoder chunk 0 chunk_len;
@@ -210,18 +210,21 @@ module Rest = struct
     Monitor.try_with_or_error (fun () -> Client.get url) >>|
     Or_error.map ~f:begin fun (resp, body) ->
       Pipe.create_reader ~close_on_exception:false begin fun w ->
-        Deferred.ignore @@ Pipe.fold (Body.to_pipe body) ~init:("", []) ~f:(fold_trades (Jsonm.decoder `Manual) w)
+        let body_pipe = Body.to_pipe body in
+        Deferred.ignore @@ Pipe.fold body_pipe ~init:("", [])
+          ~f:(fold_trades w)
       end
     end
 
   let all_trades
+      ?(decoder=Jsonm.decoder `Manual)
       ?log
       ?(wait=Time_ns.Span.min_value)
       ?(from=Time_ns.now ())
       ?(down_to=Time_ns.epoch)
       symbol =
     let rec inner from w =
-      trades ?log ~from symbol >>= function
+      trades ~decoder ?log ~from symbol >>= function
       | Error err ->
         Option.iter log ~f:(fun log -> Log.error log "%s" @@ Error.to_string_hum err);
         Clock_ns.after wait >>= fun () ->
