@@ -1,8 +1,9 @@
 open Core
 open Async
 
-open Dtc
 open Bs_devkit
+
+type side = [`Buy | `Sell] [@@deriving sexp]
 
 module Msgpck_sexp = struct
   type t = Msgpck.t =
@@ -68,7 +69,7 @@ let get_tradeID = function
 let trade_of_trade_raw { tradeID; date; typ; rate; amount } =
   let id = Option.value ~default:0 (get_tradeID tradeID) in
   let ts = Time_ns.(add (of_string (date ^ "Z")) (Span.of_int_ns id)) in
-  let side = match typ with "buy" -> Dtc.Buy | "sell" -> Sell | _ -> invalid_arg "typ_of_string" in
+  let side = match typ with "buy" -> `Buy | "sell" -> `Sell | _ -> invalid_arg "typ_of_string" in
   let price = satoshis_of_string rate in
   let qty = satoshis_of_string amount in
   DB.{ ts ; side ; price ; qty }
@@ -109,7 +110,7 @@ module Rest = struct
             ~pct_change:(Float.of_string raw.percentChange)
             ~base_volume:(Float.of_string raw.baseVolume)
             ~quote_volume:(Float.of_string raw.quoteVolume)
-            ~is_frozen:(Int.of_string raw.isFrozen |> Dtc.bool_of_int)
+            ~is_frozen:(match Int.of_string raw.isFrozen with 0 -> false | _ -> true)
             ~high24h:(Float.of_string raw.high24hr)
             ~low24h:(Float.of_string raw.high24hr)
             ()
@@ -156,16 +157,16 @@ module Rest = struct
         | "all" -> List.rev_map obj ~f:begin fun (symbol, b) ->
             book_raw_of_yojson b |> Result.ok_or_failwith |> fun { asks; bids; isFrozen; seq } ->
             symbol, create_books
-              ~asks:(bids_asks_of_yojson Sell asks)
-              ~bids:(bids_asks_of_yojson Buy bids)
+              ~asks:(bids_asks_of_yojson `Sell asks)
+              ~bids:(bids_asks_of_yojson `Buy bids)
               ~isFrozen:(not (isFrozen = "0"))
               ~seq ()
           end
         | _ ->
           book_raw_of_yojson json |> Result.ok_or_failwith |> fun { asks; bids; isFrozen; seq } ->
           [symbol, create_books
-             ~asks:(bids_asks_of_yojson Sell asks)
-             ~bids:(bids_asks_of_yojson Buy bids)
+             ~asks:(bids_asks_of_yojson `Sell asks)
+             ~bids:(bids_asks_of_yojson `Buy bids)
              ~isFrozen:(not (isFrozen = "0"))
              ~seq ()
           ]
@@ -446,17 +447,17 @@ module Rest = struct
 
   let order
       ?buf
-      ?(tif=Dtc.TimeInForce.Good_till_canceled)
+      ?tif
       ?(post_only=false)
       ~key ~secret ~side ~symbol ~price ~qty () =
     let data = List.filter_opt [
-        Some ("command", [match side with Dtc.Buy -> "buy" | Sell -> "sell" ]);
+        Some ("command", [match side with `Buy -> "buy" | `Sell -> "sell" ]);
         Some ("currencyPair", [symbol]);
         Some ("rate", [Float.to_string @@ price // 100_000_000]);
         Some ("amount", [Float.to_string @@ qty // 100_000_000]);
         (match tif with
-        | Fill_or_kill -> Some ("fillOrKill", ["1"])
-        | Immediate_or_cancel -> Some ("immediateOrCancel", ["1"])
+        | Some `Fill_or_kill -> Some ("fillOrKill", ["1"])
+        | Some `Immediate_or_cancel -> Some ("immediateOrCancel", ["1"])
         | _ -> None);
         (if post_only then Some ("postOnly", ["1"]) else None)
       ]
@@ -514,19 +515,19 @@ module Rest = struct
 
   let margin_order
       ?buf
-      ?(tif=Dtc.TimeInForce.Good_till_canceled)
+      ?tif
       ?(post_only=false)
       ?max_lending_rate
       ~key ~secret ~side ~symbol ~price ~qty () =
     let data = List.filter_opt [
-        Some ("command", [match side with Dtc.Buy -> "marginBuy" | Sell -> "marginSell" ]);
+        Some ("command", [match side with `Buy -> "marginBuy" | `Sell -> "marginSell" ]);
         Some ("currencyPair", [symbol]);
         Some ("rate", [Float.to_string @@ price // 100_000_000]);
         Some ("amount", [Float.to_string @@ qty // 100_000_000]);
         Option.map max_lending_rate ~f:(fun r -> "lendingRate", [Float.to_string r]);
         (match tif with
-        | Fill_or_kill -> Some ("fillOrKill", ["1"])
-        | Immediate_or_cancel -> Some ("immediateOrCancel", ["1"])
+        | Some `Fill_or_kill -> Some ("fillOrKill", ["1"])
+        | Some `Immediate_or_cancel -> Some ("immediateOrCancel", ["1"])
         | _ -> None);
         (if post_only then Some ("postOnly", ["1"]) else None)
       ]
@@ -572,7 +573,7 @@ module Rest = struct
   type open_orders_resp = {
     id: int;
     ts: Time_ns.t;
-    side: Dtc.side;
+    side: side;
     price: int;
     starting_qty: int;
     qty: int;
@@ -580,8 +581,8 @@ module Rest = struct
   } [@@deriving create, sexp]
 
   let side_of_string = function
-  | "buy" -> Dtc.Buy
-  | "sell" -> Sell
+  | "buy" -> `Buy
+  | "sell" -> `Sell
   | _ -> invalid_arg "side_of_string"
 
   let oo_of_oo_raw oo_raw =
@@ -642,7 +643,7 @@ module Rest = struct
     qty: int;
     fee: int;
     order_id: int;
-    side: Dtc.side;
+    side: side;
     category: trade_category
   } [@@deriving create, sexp]
 
@@ -697,7 +698,7 @@ module Rest = struct
     pl: int;
     lending_fees: int;
     liquidation_price: int option;
-    side: Dtc.side
+    side: side;
   } [@@deriving create, sexp]
 
   let margin_position_of_raw { amount; total; basePrice; liquidationPrice; pl; lendingFees; typ } =
@@ -710,7 +711,7 @@ module Rest = struct
     | `String price -> Option.some @@ satoshis_int_of_float_exn @@ Float.of_string price
     | #Yojson.Safe.json -> None
     in
-    let side = match typ with | "long" -> Some Dtc.Buy | "short" -> Some Dtc.Sell | _ -> None in
+    let side = match typ with | "long" -> Some `Buy | "short" -> Some `Sell | _ -> None in
     Option.map side ~f:begin fun side ->
       create_margin_position ~side ~price ~qty ~total ~pl ~lending_fees ?liquidation_price ()
     end
@@ -893,7 +894,7 @@ module Ws = struct
       let rate = String.Map.find_exn msg "rate" |> Msgpck.to_string in
       let amount = String.Map.find_exn msg "amount" |> Msgpck.to_string in
       let ts = Time_ns.(add (of_string (date ^ "Z")) @@ Span.of_int_ns tradeID) in
-      let side = match side with "buy" -> Dtc.Buy | "sell" -> Sell | _ -> invalid_arg "typ_of_string" in
+      let side = match side with "buy" -> `Buy | "sell" -> `Sell | _ -> invalid_arg "typ_of_string" in
       let price = satoshis_of_string rate in
       let qty = satoshis_of_string amount in
       DB.{ ts ; side ; price ; qty }
@@ -904,7 +905,7 @@ module Ws = struct
       let side = String.Map.find_exn msg "type" |> Msgpck.to_string in
       let price = String.Map.find_exn msg "rate" |> Msgpck.to_string in
       let qty = String.Map.find msg "amount" |> Option.map ~f:Msgpck.to_string in
-      let side = match side with "bid" -> Dtc.Buy | "ask" -> Sell | _ -> invalid_arg "book_of_book_raw" in
+      let side = match side with "bid" -> `Buy | "ask" -> `Sell | _ -> invalid_arg "book_of_book_raw" in
       let price = satoshis_of_string price in
       let qty = Option.value_map qty ~default:0 ~f:satoshis_of_string in
       DB.{ side ; price ; qty }
@@ -941,7 +942,7 @@ module Ws = struct
     } [@@deriving yojson]
 
     let book_of_book_raw { rate; typ; amount } =
-      let side = match typ with "bid" -> Dtc.Buy | "ask" -> Sell | _ -> invalid_arg "book_of_book_raw" in
+      let side = match typ with "bid" -> `Buy | "ask" -> `Sell | _ -> invalid_arg "book_of_book_raw" in
       let price = Fn.compose satoshis_int_of_float_exn Float.of_string rate in
       let qty = Option.value_map amount ~default:0 ~f:(Fn.compose satoshis_int_of_float_exn Float.of_string) in
       DB.{ side ; price ; qty }

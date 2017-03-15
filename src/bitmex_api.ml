@@ -1,43 +1,10 @@
 open Core
 open Async
 
-open Dtc
 open Bs_devkit
 
 let uri = Uri.of_string "https://www.bitmex.com"
 let testnet_uri = Uri.of_string "https://testnet.bitmex.com"
-
-module Instrument = struct
-  open RespObj
-  let is_index symbol = symbol.[0] = '.'
-  let to_secdef ~testnet t =
-    let symbol = string_exn t "symbol" in
-    let index = is_index symbol in
-    let exchange =
-      string_exn t "reference"
-      ^ (if testnet && not index then "T" else "")
-    in
-    let tickSize = float_exn t "tickSize" in
-    let expiration_date = Option.map (string t "expiry") ~f:(fun time ->
-        Time_ns.(of_string time |>
-                 to_int_ns_since_epoch |>
-                 (fun t -> t / 1_000_000_000) |>
-                 Int32.of_int_exn)) in
-    let open Dtc.SecurityDefinition in
-    Response.create
-      ~symbol
-      ~exchange
-      ~security_type:(if index then Index else Futures)
-      ~descr:""
-      ~min_price_increment:tickSize
-      ~price_display_format:(Dtc.price_display_format_of_ticksize tickSize)
-      ~currency_value_per_increment:tickSize
-      ~underlying_symbol:(string_exn t "underlyingSymbol")
-      ~updates_bid_ask_only:false
-      ~has_market_depth_data:(not index)
-      ?expiration_date
-      ()
-end
 
 module OrderBook = struct
   module Deprecated = struct
@@ -564,42 +531,51 @@ module Trade = struct
   } [@@deriving show,yojson]
 end
 
+type order_type = [`Market | `Limit | `Stop | `Stop_limit | `Market_if_touched]
+
 let string_of_ord_type = function
-  | Dtc.OrderType.Market -> "Market"
-  | Limit -> "Limit"
-  | Stop -> "Stop"
-  | Stop_limit -> "StopLimit"
-  | Market_if_touched -> "MarketIfTouched"
+  | `Market -> "Market"
+  | `Limit -> "Limit"
+  | `Stop -> "Stop"
+  | `Stop_limit -> "StopLimit"
+  | `Market_if_touched -> "MarketIfTouched"
 
 let ord_type_of_string = function
-  | "Market" -> Dtc.OrderType.Market
-  | "Limit" -> Limit
-  | "Stop" -> Stop
-  | "StopLimit" -> Stop_limit
-  | "MarketIfTouched" -> Market_if_touched
+  | "Market" -> `Market
+  | "Limit" -> `Limit
+  | "Stop" -> `Stop
+  | "StopLimit" -> `Stop_limit
+  | "MarketIfTouched" -> `Market_if_touched
   | s -> invalid_argf "ord_type_of_string: %s" s ()
 
+type time_in_force = [
+  | `Day
+  | `Good_till_canceled
+  | `All_or_none
+  | `Immediate_or_cancel
+  | `Fill_or_kill
+]
+
 let string_of_tif = function
-  | Dtc.TimeInForce.Day -> "Day"
-  | Good_till_canceled
-  | All_or_none -> "GoodTillCancel"
-  | Immediate_or_cancel -> "ImmediateOrCancel"
-  | Fill_or_kill -> "FillOrKill"
-  | Good_till_date_time -> invalid_arg "string_of_tif: unsupported Good_till_date_time"
+  | `Day -> "Day"
+  | `Good_till_canceled
+  | `All_or_none -> "GoodTillCancel"
+  | `Immediate_or_cancel -> "ImmediateOrCancel"
+  | `Fill_or_kill -> "FillOrKill"
 
 let tif_of_string = function
-  | "Day" -> Dtc.TimeInForce.Day
-  | "GoodTillCancel" -> Good_till_canceled
-  | "ImmediateOrCancel" -> Immediate_or_cancel
-  | "FillOrKill" -> Fill_or_kill
+  | "Day" -> `Day
+  | "GoodTillCancel" -> `Good_till_canceled
+  | "ImmediateOrCancel" -> `Immediate_or_cancel
+  | "FillOrKill" -> `Fill_or_kill
   | s -> invalid_argf "tif_of_string: %s" s ()
 
 let p1_p2_of_bitmex ~ord_type ~stopPx ~price = match ord_type with
-  | Dtc.OrderType.Market -> None, None
-  | Limit -> Some price, None
-  | Stop -> Some stopPx, None
-  | Stop_limit -> Some stopPx, Some price
-  | Market_if_touched -> Some stopPx, None
+  | `Market -> None, None
+  | `Limit -> Some price, None
+  | `Stop -> Some stopPx, None
+  | `Stop_limit -> Some stopPx, Some price
+  | `Market_if_touched -> Some stopPx, None
 
 let string_of_stop_exec_inst = function
   | `MarkPrice -> "MarkPrice"
@@ -608,16 +584,16 @@ let string_of_stop_exec_inst = function
 
 let price_fields_of_dtc ?p1 ?p2 ord_type =
   match ord_type with
-  | Dtc.OrderType.Market -> []
-  | Limit -> begin match p1 with
+  | `Market -> []
+  | `Limit -> begin match p1 with
     | None -> []
     | Some p1 -> ["price", `Float p1]
     end
-  | Stop | Market_if_touched -> begin match p1 with
+  | `Stop | `Market_if_touched -> begin match p1 with
     | None -> invalid_arg "price_field_of_dtc" (* Cannot happen *)
     | Some p1 -> ["stopPx", `Float p1]
     end
-  | Stop_limit ->
+  | `Stop_limit ->
     List.filter_opt [
       Option.map p1 ~f:(fun p1 -> "stopPx", `Float p1);
       Option.map p2 ~f:(fun p2 -> "price", `Float p2);
@@ -626,15 +602,15 @@ let price_fields_of_dtc ?p1 ?p2 ord_type =
 let execInst_of_dtc ord_type tif stop_exec_inst =
   let sei_str = string_of_stop_exec_inst stop_exec_inst in
   let execInst = match ord_type with
-    | Dtc.OrderType.Stop | Market_if_touched | Stop_limit -> Some sei_str
+    | `Stop | `Market_if_touched | `Stop_limit -> Some sei_str
     | _ -> None
   in
   match tif with
-  | Dtc.TimeInForce.All_or_none -> [
+  | `All_or_none -> [
       "execInst", `String (Option.value_map execInst ~default:"AllOrNone" ~f:(fun ei -> "AllOrNone," ^ ei));
       "displayQty", `Float 0.
     ]
-  | _ -> Option.value_map execInst ~default:[] ~f:(fun ei -> ["execInst", `String ei])
+  | #time_in_force -> Option.value_map execInst ~default:[] ~f:(fun ei -> ["execInst", `String ei])
 
 let update_action_of_string = function
   | "partial" -> OB.Partial
@@ -644,11 +620,11 @@ let update_action_of_string = function
   | s -> invalid_argf "update_action_of_bitmex: %s" s ()
 
 let side_of_bmex = function
-  | "Buy" -> Some Dtc.Buy
-  | "Sell" -> Some Sell
+  | "Buy" -> Some `Buy
+  | "Sell" -> Some `Sell
   | "" -> None
   | _ -> invalid_arg "side_of_bmex"
 
 let bmex_of_side = function
-  | Dtc.Buy -> "Buy"
-  | Sell -> "Sell"
+  | `Buy -> "Buy"
+  | `Sell -> "Sell"

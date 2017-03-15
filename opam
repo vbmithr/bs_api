@@ -18,7 +18,6 @@ depends: [
   "bs-devkit"
   "nocrypto"
   "hex"
-  "dtc"
   "cohttp"
   "websocket"
   "msgpck"

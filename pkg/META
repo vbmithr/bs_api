@@ -6,7 +6,6 @@ requires = "
   bs-devkit
   nocrypto
   hex
-  dtc
   cohttp.async
   websocket.async
   wamp.msgpck

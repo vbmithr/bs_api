@@ -179,7 +179,7 @@ let plnx key secret topics =
         | Error err -> error "%s" @@ Error.to_string_hum err
         end
       | [side; symbol; price; qty] ->
-        let side = match side with "buy" -> Dtc.Dtc.Buy | "sell" -> Sell | _ -> failwith "side" in
+        let side = match side with "buy" -> `Buy | "sell" -> `Sell | _ -> failwith "side" in
         let price = satoshis_int_of_float_exn @@ Float.of_string price in
         let qty = satoshis_int_of_float_exn @@ Float.of_string qty in
         if margin_enabled symbol then

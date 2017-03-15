@@ -1,14 +1,18 @@
 open Core
 open Async
 
-open Dtc.Dtc
 open Bs_devkit
 
 let exchange = "BITFINEX"
 
+type side = [`Buy | `Sell]
+type order_type = [`Market | `Limit | `Stop]
+type time_in_force = [`Day | `Good_till_canceled | `Fill_or_kill]
+type order_status = [`Open | `Filled | `Partially_filled | `Canceled]
+
 let side_of_amount amount = match Float.sign_exn amount with
-  | Pos -> Buy
-  | Neg -> Sell
+  | Pos -> `Buy
+  | Neg -> `Sell
   | Zero -> invalid_arg "side_of_amount"
 
 module Order = struct
@@ -17,16 +21,16 @@ module Order = struct
     | Exchange
 
   let types_of_string = function
-    | "MARKET" -> Margin, OrderType.Market, TimeInForce.Good_till_canceled
-    | "LIMIT" -> Margin, Limit, Good_till_canceled
-    | "STOP" -> Margin, Stop, Good_till_canceled
-    | "TRAILING STOP" -> Margin, Market, Good_till_canceled
-    | "FOK" -> Margin, Limit, Fill_or_kill
-    | "EXCHANGE MARKET" -> Exchange, Market, Good_till_canceled
-    | "EXCHANGE LIMIT" -> Exchange, Limit, Good_till_canceled
-    | "EXCHANGE STOP" -> Exchange, Stop, Good_till_canceled
-    | "EXCHANGE TRAILING STOP" -> Exchange, Market, Good_till_canceled
-    | "EXCHANGE FOK" -> Exchange, Limit, Fill_or_kill
+    | "MARKET" -> Margin, `Market, `Good_till_canceled
+    | "LIMIT" -> Margin, `Limit, `Good_till_canceled
+    | "STOP" -> Margin, `Stop, `Good_till_canceled
+    | "TRAILING STOP" -> Margin, `Market, `Good_till_canceled
+    | "FOK" -> Margin, `Limit, `Fill_or_kill
+    | "EXCHANGE MARKET" -> Exchange, `Market, `Good_till_canceled
+    | "EXCHANGE LIMIT" -> Exchange, `Limit, `Good_till_canceled
+    | "EXCHANGE STOP" -> Exchange, `Stop, `Good_till_canceled
+    | "EXCHANGE TRAILING STOP" -> Exchange, `Market, `Good_till_canceled
+    | "EXCHANGE FOK" -> Exchange, `Limit, `Fill_or_kill
     | _ -> invalid_arg "Order.types_of_string"
 end
 
@@ -89,7 +93,7 @@ module Rest = struct
         ~ts:Time_ns.(of_int_ns_since_epoch @@ timestamp * 1_000_000_000)
         ~price:Float.(of_string price)
         ~qty:Float.(of_string amount)
-        ~side:(match typ with "sell" -> Sell | "buy" -> Buy | _ -> invalid_arg "side_of_string")
+        ~side:(match typ with "sell" -> `Sell | "buy" -> `Buy | _ -> invalid_arg "side_of_string")
         ()
 
     let get_exn ?log ?(start=Time_ns.epoch) ?(count=50) pair =
@@ -139,28 +143,29 @@ module Rest = struct
 
     module Order = struct
       let string_of_buy_sell = function
-      | Buy -> "buy"
-      | Sell -> "sell"
+      | `Buy -> "buy"
+      | `Sell -> "sell"
 
       let string_of_ord_type_tif ord_type tif = match ord_type, tif with
-      | Some OrderType.Market, _ -> "market"
-      | Some Stop, _ -> "stop"
-      | Some Limit, Some TimeInForce.Day
-      | Some Limit, Some Good_till_canceled -> "limit"
-      | Some Limit, Some Fill_or_kill -> "fill-or-kill"
-      | _, _ -> invalid_arg "string_of_ord_type_tif"
+      | `Market, _ -> "market"
+      | `Stop, _ -> "stop"
+      | `Limit, `Day
+      | `Limit, `Good_till_canceled -> "limit"
+      | `Limit, `Fill_or_kill -> "fill-or-kill"
 
-      let submit_exn ?buf ?log ~key ~secret o =
-        let open Trading.Order in
-        let side = Option.value_exn ~message:"side is unset" o.Submit.side in
+      let submit_exn
+          ?buf ?log
+          ~key ~secret
+          ~side ~tif ~kind ~symbol ~price ~qty =
+        let side = Option.value_exn ~message:"side is unset" side in
         let side = string_of_buy_sell side in
-        let typ = string_of_ord_type_tif o.ord_type o.tif in
-        let price = if o.ord_type = Some Market then 1. else o.p1 in
+        let typ = string_of_ord_type_tif kind tif in
+        let price = if kind = `Market then 1. else price in
         let body = `Assoc [
-            "symbol", `String o.Submit.symbol;
+            "symbol", `String symbol;
             "exchange", `String "bitfinex";
             "price", `String (Printf.sprintf "%.5f" price);
-            "amount", `String (Printf.sprintf "%.2f" o.qty);
+            "amount", `String (Printf.sprintf "%.2f" qty);
             "side", `String side;
             "type", `String typ;
           ]
@@ -201,8 +206,8 @@ module Rest = struct
           price: float;
           avg_execution_price: float;
           side: side;
-          typ: OrderType.t;
-          tif:TimeInForce.t;
+          typ: order_type;
+          tif: time_in_force;
           ts: Time_ns.t;
           is_live: bool;
           is_hidden: bool;
@@ -221,8 +226,8 @@ module Rest = struct
           let remaining_amount = Float.of_string r.remaining_amount in
           let executed_amount = Float.of_string r.executed_amount in
           let side = match r.side with
-            | "buy" -> Buy
-            | "sell" -> Sell
+            | "buy" -> `Buy
+            | "sell" -> `Sell
             | _ -> invalid_arg "side_of_string"
           in
           let _, typ, tif = Order.types_of_string @@ String.uppercase r.typ in
@@ -488,10 +493,10 @@ module Ws = struct
         let words = String.split status ~on:' ' in
         match List.hd words with
         | None -> invalid_arg "Order.status_of_string"
-        | Some "ACTIVE" -> OrderStatus.Open
-        | Some "EXECUTED" -> Filled
-        | Some "PARTIALLY" -> Partially_filled
-        | Some "CANCELED" -> Canceled
+        | Some "ACTIVE" -> `Open
+        | Some "EXECUTED" -> `Filled
+        | Some "PARTIALLY" -> `Partially_filled
+        | Some "CANCELED" -> `Canceled
         | Some _ -> invalid_arg "Order.status_of_string"
 
       type t = {
@@ -499,10 +504,10 @@ module Ws = struct
         pair: string;
         amount: float;
         amount_orig: float;
-        typ: OrderType.t;
-        tif:TimeInForce.t;
+        typ: order_type ;
+        tif: time_in_force ;
         exchange_typ:Order.exchange_type;
-        status: OrderStatus.t;
+        status: order_status;
         price: float;
         avg_price: float;
         created_at: Time_ns.t;
@@ -538,8 +543,8 @@ module Ws = struct
         amount: float;
         price: float;
         exchange_typ: Order.exchange_type;
-        typ: OrderType.t;
-        tif: TimeInForce.t;
+        typ: order_type;
+        tif: time_in_force;
         order_price: float;
         fee: float;
         fee_currency: string;
