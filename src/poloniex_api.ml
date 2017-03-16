@@ -4,6 +4,11 @@ open Async
 open Bs_devkit
 
 type side = [`Buy | `Sell] [@@deriving sexp]
+let string_of_side = function `Buy -> "buy" | `Sell -> "sell"
+let side_of_string = function
+| "buy" -> `Buy
+| "sell" -> `Sell
+| _ -> invalid_arg "side_of string"
 
 module Msgpck_sexp = struct
   type t = Msgpck.t =
@@ -48,31 +53,49 @@ type ticker = {
   is_frozen: bool;
   high24h: float;
   low24h: float;
-} [@@deriving show,create]
+}
 
-type trade_raw = {
-  globalTradeID: (Yojson.Safe.json [@default `Null]);
-  tradeID: Yojson.Safe.json;
-  date: string;
-  typ: string [@key "type"];
-  rate: string;
-  amount: string;
-  total: string;
-} [@@deriving create,yojson]
+type trade = {
+  ts: Time_ns.t;
+  side: [`Buy | `Sell];
+  price: int; (* in satoshis *)
+  qty: int; (* in satoshis *)
+} [@@deriving sexp]
 
 let get_tradeID = function
   | `Null -> None
   | `Int i -> Some i
   | `String s -> Option.some @@ Int.of_string s
-  | #Yojson.Safe.json -> invalid_arg "int_of_globalTradeID"
+  | #Ezjsonm.value -> invalid_arg "get_tradeID"
 
-let trade_of_trade_raw { tradeID; date; typ; rate; amount } =
-  let id = Option.value ~default:0 (get_tradeID tradeID) in
-  let ts = Time_ns.(add (of_string (date ^ "Z")) (Span.of_int_ns id)) in
-  let side = match typ with "buy" -> `Buy | "sell" -> `Sell | _ -> invalid_arg "typ_of_string" in
-  let price = satoshis_of_string rate in
-  let qty = satoshis_of_string amount in
-  DB.{ ts ; side ; price ; qty }
+let trade_encoding =
+  let open Json_encoding in
+  conv
+    ( fun { ts ; side ; price ; qty } ->
+        let price = price // 100_000_000 in
+        let qty = qty // 100_000_000 in
+        let total = price *. qty in
+        (None, Json_repr.to_any `Null,
+         Time_ns.to_string ts, string_of_side side,
+         Float.to_string price,
+         Float.to_string qty,
+         Float.to_string total))
+    (fun (globalTradeID, tradeID, date, typ, rate, amount, total) ->
+       let tradeID = Json_repr.from_any tradeID |> get_tradeID in
+       let id = Option.value ~default:0 tradeID in
+       let ts = Time_ns.(add (of_string (date ^ "Z")) (Span.of_int_ns id)) in
+       let side = side_of_string typ in
+       let price = satoshis_of_string rate in
+       let qty = satoshis_of_string amount in
+       { ts ; side ; price ; qty })
+    (obj7
+       (opt "globalTradeID" any_value)
+       (req "tradeID" any_value)
+       (req "date" string)
+       (req "type" string)
+       (req "rate" string)
+       (req "amount" string)
+       (req "total" string))
 
 module Rest = struct
   open Cohttp_async
@@ -80,43 +103,58 @@ module Rest = struct
   let base_uri = Uri.of_string "https://poloniex.com/public"
   let trading_uri = Uri.of_string "https://poloniex.com/tradingApi"
 
-  type ticker_raw = {
-    id: int;
-    last: string;
-    lowestAsk: string;
-    highestBid: string;
-    percentChange: string;
-    baseVolume: string;
-    quoteVolume: string;
-    isFrozen: string;
-    high24hr: string;
-    low24hr: string;
-  } [@@deriving yojson]
+  let ticker_encoding symbol =
+    let open Json_encoding in
+    conv
+      (fun { symbol; last; ask ; bid ; pct_change ; base_volume ; quote_volume ;
+             is_frozen ; high24h ; low24h } ->
+        let open Float in
+        let last = to_string last in
+        let lowestAsk = to_string ask in
+        let highestBid = to_string bid in
+        let percentChange = to_string pct_change in
+        let baseVolume = to_string base_volume in
+        let quoteVolume = to_string quote_volume in
+        let isFrozen = if is_frozen then "1" else "0" in
+        let high24hr = to_string high24h in
+        let low24hr = to_string low24h in
+        (0, last, lowestAsk, highestBid, percentChange, baseVolume,
+         quoteVolume, isFrozen, high24hr, low24hr))
+      (fun (id, last, lowestAsk, highestBid, percentChange, baseVolume,
+            quoteVolume, isFrozen, high24hr, low24hr) -> {
+          symbol ;
+          last = (Float.of_string last) ;
+          ask = (Float.of_string lowestAsk) ;
+          bid = (Float.of_string highestBid) ;
+          pct_change = (Float.of_string percentChange) ;
+          base_volume = (Float.of_string baseVolume) ;
+          quote_volume = (Float.of_string quoteVolume) ;
+          is_frozen = (match Int.of_string isFrozen with 0 -> false | _ -> true) ;
+          high24h = (Float.of_string high24hr) ;
+          low24h = (Float.of_string high24hr) })
+      (obj10
+         (req "id" int)
+         (req "last" string)
+         (req "lowestAsk" string)
+         (req "highestBid" string)
+         (req "percentChange" string)
+         (req "baseVolume" string)
+         (req "quoteVolume" string)
+         (req "isFrozen" string)
+         (req "high24hr" string)
+         (req "low24hr" string))
 
-  let tickers ?buf () =
+  let tickers () =
     let url = Uri.with_query' base_uri ["command", "returnTicker"] in
     Monitor.try_with_or_error begin fun () ->
       Client.get url >>= fun (resp, body) ->
       Body.to_string body >>| fun body_str ->
-      match Yojson.Safe.from_string ?buf body_str with
-      | `Assoc tickers ->
+      match Ezjsonm.from_string  body_str with
+      | `O tickers ->
         List.rev_map tickers ~f:begin fun (symbol, t) ->
-          let raw = ticker_raw_of_yojson t |> Result.ok_or_failwith in
-          create_ticker
-            ~symbol
-            ~last:(Float.of_string raw.last)
-            ~ask:(Float.of_string raw.lowestAsk)
-            ~bid:(Float.of_string raw.highestBid)
-            ~pct_change:(Float.of_string raw.percentChange)
-            ~base_volume:(Float.of_string raw.baseVolume)
-            ~quote_volume:(Float.of_string raw.quoteVolume)
-            ~is_frozen:(match Int.of_string raw.isFrozen with 0 -> false | _ -> true)
-            ~high24h:(Float.of_string raw.high24hr)
-            ~low24h:(Float.of_string raw.high24hr)
-            ()
-
+          Json_encoding.destruct (ticker_encoding symbol) t
         end
-      | #Yojson.Safe.json -> invalid_arg "tickers"
+      | #Ezjsonm.value -> invalid_arg "tickers"
     end
 
   let bids_asks_of_yojson side records =
@@ -203,10 +241,7 @@ module Rest = struct
         | `Lexeme (`String s) -> decode nb_decoded "" ((name, `String s)::tmp)
         | `Lexeme (`Name name) -> decode nb_decoded name tmp
         | `Lexeme `Oe ->
-          let trade = match trade_raw_of_yojson @@ `Assoc tmp with
-          | Error _ -> failwith (Yojson.Safe.to_string (`Assoc tmp))
-          | Ok trade -> trade_of_trade_raw trade
-          in
+          let trade = Json_encoding.destruct trade_encoding (`O tmp) in
           Pipe.write trades_w trade >>= fun () ->
           decode (succ nb_decoded) "" []
 
@@ -420,12 +455,12 @@ module Rest = struct
   | `Null -> []
   | `List resulting -> List.map resulting ~f:(fun tr -> trade_raw_of_yojson tr |> Result.ok_or_failwith)
   | `Assoc [_, `List resulting] -> List.map resulting ~f:(fun tr -> trade_raw_of_yojson tr |> Result.ok_or_failwith)
-  | #Yojson.Safe.json -> invalid_arg "fix_resultingTrades"
+  | #Ezjsonm.value -> invalid_arg "fix_resultingTrades"
 
   type trade_info = {
     gid: int option;
     id: int;
-    trade: DB.trade;
+    trade: trade;
   } [@@deriving create, sexp]
 
   type order_response = {
@@ -433,6 +468,21 @@ module Rest = struct
     trades: trade_info list;
     amount_unfilled: int;
   } [@@deriving create, sexp]
+
+  let order_response_encoding =
+    let open Json_encoding in
+    conv
+      (fun { id ; trades ; amount_unfilled } ->
+         (1, "", "", Int.to_string id,
+          Json_repr.to_any (`A []), Int.to_string amount_unfilled))
+      (fun (success)
+      (obj6
+         (dft "success" int 1)
+         (dft "message" string "")
+         (dft "error" string "")
+         (dft "orderNumber" string "")
+         (opt "resultingTrades" any_value)
+         (dft "amountUnfilled" string ""))
 
   let trade_info_of_resultingTrades tr =
     let id = Option.value ~default:0 @@ get_tradeID tr.tradeID in
@@ -886,8 +936,8 @@ module Ws = struct
       let is_frozen = if is_frozen = 0 then false else true in
       let high24h = Float.of_string high24h in
       let low24h = Float.of_string low24h in
-      create_ticker ~symbol ~last ~ask ~bid ~pct_change ~base_volume ~quote_volume ~is_frozen
-        ~high24h ~low24h ()
+      { symbol ; last ; ask ; bid ; pct_change ; base_volume ;
+        quote_volume ; is_frozen ; high24h ; low24h }
     | _ -> invalid_arg "ticker_of_msgpck"
 
     let trade_of_msgpck msg = try
@@ -935,8 +985,8 @@ module Ws = struct
       let is_frozen = if is_frozen = 0 then false else true in
       let high24h = Float.of_string high24h in
       let low24h = Float.of_string low24h in
-      create_ticker ~symbol ~last ~ask ~bid ~pct_change ~base_volume ~quote_volume ~is_frozen
-        ~high24h ~low24h ()
+      { symbol ; last ; ask ; bid ; pct_change ; base_volume ;
+        quote_volume ; is_frozen ; high24h ; low24h }
     | json -> invalid_argf "ticker_of_json: %s" Yojson.Safe.(to_string json) ()
 
     type book_raw = {

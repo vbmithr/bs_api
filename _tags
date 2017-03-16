@@ -15,4 +15,6 @@ true : bin_annot, package(bytes), warn(-40)
        package(websocket.async), \
        package(wamp.msgpck), \
        package(jsonm), \
+       package(ocplib-json-typed), \
+       package(ezjsonm), \
        thread
