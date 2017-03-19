@@ -23,6 +23,7 @@ depends: [
   "msgpck"
   "wamp"
   "jsonm"
+  "ppx_deriving_yojson"
 ]
 depopts: []
 build:
