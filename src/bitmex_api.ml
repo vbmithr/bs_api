@@ -127,7 +127,7 @@ module Rest = struct
 
     let perms_of_raw = function
     | `String perm -> `Perm perm
-    | `List [`String "dtc"; `Assoc ["username", `String username]] -> `Dtc username
+    | `List [`String "sierra-dtc"; `Assoc ["username", `String username]] -> `Dtc username
     | #Yojson.Safe.json -> invalid_arg "perms_of_raw"
 
     type entry_raw = {
