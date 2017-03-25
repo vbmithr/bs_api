@@ -134,11 +134,11 @@ module Rest = struct
       id: string;
       secret: string;
       name: string;
-      nonce: string;
+      nonce: int;
       cidr: string;
       permissions: Yojson.Safe.json list;
       enabled: bool;
-      userid: int;
+      userId: int;
       created: string;
     } [@@deriving yojson]
 
@@ -146,18 +146,18 @@ module Rest = struct
       id: string;
       secret: string;
       name: string;
-      nonce: string;
+      nonce: int;
       cidr: string;
       permissions: permission list;
       enabled: bool;
-      userid: int;
+      userId: int;
       created: Time_ns.t;
     } [@@deriving create, sexp]
 
-    let entry_of_raw ({ id; secret; name; nonce; cidr; permissions; enabled; userid; created }:entry_raw) =
+    let entry_of_raw ({ id; secret; name; nonce; cidr; permissions; enabled; userId; created }:entry_raw) =
       let permissions = List.map permissions ~f:perms_of_raw in
       let created = Time_ns.of_string created in
-      create_entry ~id ~secret ~name ~nonce ~cidr ~permissions ~enabled ~userid ~created ()
+      create_entry ~id ~secret ~name ~nonce ~cidr ~permissions ~enabled ~userId ~created ()
 
     let dtc ?buf ?log ?username ~testnet ~key ~secret () =
       let path = "/api/v1/apiKey/dtc/" ^ match username with None -> "all" | Some u -> "get" in
@@ -166,8 +166,14 @@ module Rest = struct
       let uri = Uri.with_query' uri query in
       let uri = Uri.with_path uri path in
       let headers = mk_headers ?log ~key ~secret `GET uri in
-      call ?buf ?log ~name:"position" ~f:(Client.get ~headers) uri >>| function
-      | Ok (`List entries) -> Ok (List.map entries ~f:(fun e -> entry_raw_of_yojson e |> Result.ok_or_failwith |> entry_of_raw))
+      call ?buf ?log ~name:"dtc" ~f:(Client.get ~headers) uri >>| function
+      | Ok (`List entries) -> begin
+        try
+          Ok (List.map entries ~f:begin fun e ->
+              entry_raw_of_yojson e |> Result.ok_or_failwith |> entry_of_raw
+            end)
+        with exn -> Error (Error.of_exn exn)
+      end
       | Ok json -> Error (Error.of_string (Yojson.Safe.to_string ?buf json))
       | Error err -> Error err
   end
