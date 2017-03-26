@@ -245,9 +245,9 @@ let plnx =
 
 let plnx_trades currency =
   let open PLNX in
-  let r = Rest.all_trades ~log:(Lazy.force log) currency in
+  let r = Rest.all_trades_exn ~log:(Lazy.force log) currency in
   let transfer_f t = DB.sexp_of_trade t |> Sexplib.Sexp.to_string |> fun s -> s ^ "\n" in
-  Pipe.transfer r Writer.(pipe @@ Lazy.force stderr) ~f:transfer_f >>= fun () ->
+  Pipe.transfer r Writer.(pipe @@ Lazy.force stdout) ~f:transfer_f >>= fun () ->
   Shutdown.exit 0
 
 let plnx_trades =

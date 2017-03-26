@@ -174,7 +174,7 @@ module Rest = struct
       | #Yojson.Safe.json -> invalid_arg "books"
     end
 
-  let trades ?(decoder=Jsonm.decoder `Manual) ?log ?from ?down_to symbol =
+  let trades_exn ?(decoder=Jsonm.decoder `Manual) ?log ?from ?down_to symbol =
     let from_sec = Option.map from ~f:(fun start -> Time_ns.to_int_ns_since_epoch start / 1_000_000_000 |> Int.to_string) in
     let down_to_sec = Option.map down_to ~f:(fun stop -> Time_ns.to_int_ns_since_epoch stop / 1_000_000_000 |> Int.to_string) in
     let url = Uri.add_query_params' base_uri @@ List.filter_opt Option.[
@@ -184,13 +184,16 @@ module Rest = struct
         map from_sec ~f:(fun t -> "end", t);
       ]
     in
-    let fold_trades trades_w (name, tmp) chunk =
+    let fold_trades_exn trades_w (name, tmp) chunk =
       let chunk_len = String.length chunk in
       let chunk = Caml.Bytes.unsafe_of_string chunk in
       Jsonm.Manual.src decoder chunk 0 chunk_len;
       let rec decode name tmp =
         match Jsonm.decode decoder with
-        | `Error err -> failwith @@ Format.asprintf "%a" Jsonm.pp_error err
+        | `Error err ->
+          let err_str = Format.asprintf "%a" Jsonm.pp_error err in
+          Option.iter log ~f:(fun log -> Log.error log "%s" err_str) ;
+          failwith err_str
         | `Lexeme (`Float f) -> decode "" ((name, `Int (Float.to_int f))::tmp)
         | `Lexeme (`String s) -> decode "" ((name, `String s)::tmp)
         | `Lexeme (`Name name) -> decode name tmp
@@ -208,16 +211,14 @@ module Rest = struct
       in
       decode name tmp
     in
-    Monitor.try_with_or_error (fun () -> Client.get url) >>|
-    Or_error.map ~f:begin fun (resp, body) ->
-      Pipe.create_reader ~close_on_exception:false begin fun w ->
-        let body_pipe = Body.to_pipe body in
-        Deferred.ignore @@ Pipe.fold body_pipe ~init:("", [])
-          ~f:(fold_trades w)
-      end
+    Client.get url >>| fun (resp, body) ->
+    Pipe.create_reader ~close_on_exception:false begin fun w ->
+      let body_pipe = Body.to_pipe body in
+      Deferred.ignore @@ Pipe.fold body_pipe ~init:("", [])
+        ~f:(fold_trades_exn w)
     end
 
-  let all_trades
+  let all_trades_exn
       ?(decoder=Jsonm.decoder `Manual)
       ?log
       ?(wait=Time_ns.Span.min_value)
@@ -225,18 +226,13 @@ module Rest = struct
       ?(down_to=Time_ns.epoch)
       symbol =
     let rec inner from w =
-      trades ~decoder ?log ~from symbol >>= function
-      | Error err ->
-        Option.iter log ~f:(fun log -> Log.error log "%s" @@ Error.to_string_hum err);
-        Clock_ns.after wait >>= fun () ->
-        inner from w
-      | Ok ts ->
-        let oldest_ts = ref @@ Time_ns.max_value in
-        Pipe.(transfer ts w ~f:(fun t -> oldest_ts := t.ts; t)) >>= fun () ->
-        if !oldest_ts = Time_ns.max_value || Time_ns.(!oldest_ts < down_to) then (Pipe.close w; Deferred.unit)
-        else
-        Clock_ns.after wait >>= fun () ->
-        inner Time_ns.(sub !oldest_ts @@ Span.of_int_sec 1) w
+      trades_exn ~decoder ?log ~from symbol >>= fun trades ->
+      let oldest_ts = ref @@ Time_ns.max_value in
+      Pipe.(transfer trades w ~f:(fun t -> oldest_ts := t.ts; t)) >>= fun () ->
+      if !oldest_ts = Time_ns.max_value || Time_ns.(!oldest_ts < down_to) then (Pipe.close w; Deferred.unit)
+      else
+      Clock_ns.after wait >>= fun () ->
+      inner Time_ns.(sub !oldest_ts @@ Span.of_int_sec 1) w
     in
     Pipe.create_reader ~close_on_exception:false (inner from);
 
