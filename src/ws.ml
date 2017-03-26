@@ -243,9 +243,10 @@ let plnx =
   in
   Command.basic ~summary:"Poloniex WS client" base_spec run
 
-let plnx_trades currency =
+let plnx_trades symbol =
   let open PLNX in
-  let r = Rest.all_trades_exn ~log:(Lazy.force log) currency in
+  let r = Rest.all_trades_exn
+      ~log:(Lazy.force log) symbol in
   let transfer_f t = DB.sexp_of_trade t |> Sexplib.Sexp.to_string |> fun s -> s ^ "\n" in
   Pipe.transfer r Writer.(pipe @@ Lazy.force stdout) ~f:transfer_f >>= fun () ->
   Shutdown.exit 0

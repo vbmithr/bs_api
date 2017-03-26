@@ -174,67 +174,75 @@ module Rest = struct
       | #Yojson.Safe.json -> invalid_arg "books"
     end
 
-  let trades_exn ?(decoder=Jsonm.decoder `Manual) ?log ?from ?down_to symbol =
-    let from_sec = Option.map from ~f:(fun start -> Time_ns.to_int_ns_since_epoch start / 1_000_000_000 |> Int.to_string) in
-    let down_to_sec = Option.map down_to ~f:(fun stop -> Time_ns.to_int_ns_since_epoch stop / 1_000_000_000 |> Int.to_string) in
+  let trades_exn ?log ?start_ts ?end_ts symbol =
+    let start_ts_sec = Option.map start_ts ~f:begin fun ts ->
+        Time_ns.to_int_ns_since_epoch ts / 1_000_000_000 |> Int.to_string
+      end in
+    let end_ts_sec = Option.map end_ts ~f:begin fun ts ->
+        Time_ns.to_int_ns_since_epoch ts / 1_000_000_000 |> Int.to_string
+      end in
     let url = Uri.add_query_params' base_uri @@ List.filter_opt Option.[
         some ("command", "returnTradeHistory");
         some ("currencyPair", symbol);
-        map down_to_sec ~f:(fun t -> "start", t);
-        map from_sec ~f:(fun t -> "end", t);
+        map start_ts_sec ~f:(fun t -> "start", t);
+        map end_ts_sec ~f:(fun t -> "end", t);
       ]
     in
-    let fold_trades_exn trades_w (name, tmp) chunk =
+    let decoder = Jsonm.decoder `Manual in
+    let fold_trades_exn trades_w (nb_decoded, name, tmp) chunk =
       let chunk_len = String.length chunk in
       let chunk = Caml.Bytes.unsafe_of_string chunk in
       Jsonm.Manual.src decoder chunk 0 chunk_len;
-      let rec decode name tmp =
+      let rec decode nb_decoded name tmp =
         match Jsonm.decode decoder with
         | `Error err ->
           let err_str = Format.asprintf "%a" Jsonm.pp_error err in
           Option.iter log ~f:(fun log -> Log.error log "%s" err_str) ;
           failwith err_str
-        | `Lexeme (`Float f) -> decode "" ((name, `Int (Float.to_int f))::tmp)
-        | `Lexeme (`String s) -> decode "" ((name, `String s)::tmp)
-        | `Lexeme (`Name name) -> decode name tmp
+        | `Lexeme (`Float f) -> decode nb_decoded "" ((name, `Int (Float.to_int f))::tmp)
+        | `Lexeme (`String s) -> decode nb_decoded "" ((name, `String s)::tmp)
+        | `Lexeme (`Name name) -> decode nb_decoded name tmp
         | `Lexeme `Oe ->
           let trade = match trade_raw_of_yojson @@ `Assoc tmp with
           | Error _ -> failwith (Yojson.Safe.to_string (`Assoc tmp))
           | Ok trade -> trade_of_trade_raw trade
           in
           Pipe.write trades_w trade >>= fun () ->
-          decode "" []
+          decode (succ nb_decoded) "" []
 
-        | `Lexeme #Jsonm.lexeme -> decode name tmp
-        | `Await -> return (name, tmp)
-        | `End -> assert false
+        | `Lexeme `Ae -> return (nb_decoded, name, tmp)
+        | `Lexeme #Jsonm.lexeme -> decode nb_decoded name tmp
+        | `Await -> return (nb_decoded, name, tmp)
+        | `End -> return (nb_decoded, name, tmp)
       in
-      decode name tmp
+      decode nb_decoded name tmp
     in
+    Option.iter log ~f:(fun log -> Log.debug log "GET %s" (Uri.to_string url)) ;
     Client.get url >>| fun (resp, body) ->
     Pipe.create_reader ~close_on_exception:false begin fun w ->
       let body_pipe = Body.to_pipe body in
-      Deferred.ignore @@ Pipe.fold body_pipe ~init:("", [])
+      Deferred.ignore @@ Pipe.fold body_pipe
+        ~init:(0, "", [])
         ~f:(fold_trades_exn w)
     end
 
   let all_trades_exn
-      ?(decoder=Jsonm.decoder `Manual)
       ?log
       ?(wait=Time_ns.Span.min_value)
-      ?(from=Time_ns.now ())
-      ?(down_to=Time_ns.epoch)
+      ?(start_ts=Time_ns.epoch)
+      ?(end_ts=Time_ns.now ())
       symbol =
-    let rec inner from w =
-      trades_exn ~decoder ?log ~from symbol >>= fun trades ->
+    let rec inner cur_end_ts w =
+      trades_exn ?log ~end_ts:cur_end_ts symbol >>= fun trades ->
       let oldest_ts = ref @@ Time_ns.max_value in
-      Pipe.(transfer trades w ~f:(fun t -> oldest_ts := t.ts; t)) >>= fun () ->
-      if !oldest_ts = Time_ns.max_value || Time_ns.(!oldest_ts < down_to) then (Pipe.close w; Deferred.unit)
+      Pipe.transfer trades w ~f:(fun t -> oldest_ts := t.ts; t) >>= fun () ->
+      if !oldest_ts = Time_ns.max_value || Time_ns.(!oldest_ts < start_ts) then
+        (Pipe.close w; Deferred.unit)
       else
       Clock_ns.after wait >>= fun () ->
       inner Time_ns.(sub !oldest_ts @@ Span.of_int_sec 1) w
     in
-    Pipe.create_reader ~close_on_exception:false (inner from);
+    Pipe.create_reader ~close_on_exception:false (inner end_ts)
 
   type currency = {
     id: int;
