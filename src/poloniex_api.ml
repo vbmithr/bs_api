@@ -320,9 +320,10 @@ module Rest = struct
         if all then Some ("account", ["all"]) else None
       ]
     in
-    let data_str, headers = sign ~key ~secret ~data in
+    let body, headers = sign ~key ~secret ~data in
+    let body = Body.of_string body in
     Monitor.try_with_or_error begin fun () ->
-      Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+      Client.post ~body ~headers trading_uri >>= fun (resp, body) ->
       Body.to_string body >>| fun body_str ->
       match Yojson.Safe.from_string ?buf body_str with
       | `Assoc ["error", `String msg] -> failwith msg
@@ -350,9 +351,10 @@ module Rest = struct
   let positive_balances ?buf ~key ~secret () =
     let invarg json = invalid_argf "positive_balances: %s" (Yojson.Safe.to_string ?buf json) () in
     let data = ["command", ["returnAvailableAccountBalances"]] in
-    let data_str, headers = sign ~key ~secret ~data in
+    let body, headers = sign ~key ~secret ~data in
+    let body = Body.of_string body in
     Monitor.try_with_or_error begin fun () ->
-      Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+      Client.post ~body ~headers trading_uri >>= fun (resp, body) ->
       Body.to_string body >>| fun body_str ->
       match Yojson.Safe.from_string ?buf body_str with
       | `Assoc ["error", `String msg] -> failwith msg
@@ -398,9 +400,10 @@ module Rest = struct
 
   let margin_account_summary ?buf ~key ~secret () =
     let data = ["command", ["returnMarginAccountSummary"]] in
-    let data_str, headers = sign ~key ~secret ~data in
+    let body, headers = sign ~key ~secret ~data in
+    let body = Body.of_string body in
     Monitor.try_with_or_error begin fun () ->
-      Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+      Client.post ~body ~headers trading_uri >>= fun (resp, body) ->
       Body.to_string body >>| fun body_str ->
       match Yojson.Safe.from_string ?buf body_str |> margin_account_summary_raw_of_yojson with
       | Error msg -> failwith body_str
@@ -466,9 +469,10 @@ module Rest = struct
         (if post_only then Some ("postOnly", ["1"]) else None)
       ]
     in
-    let data_str, headers = sign ~key ~secret ~data in
+    let body, headers = sign ~key ~secret ~data in
+    let body = Body.of_string body in
     Monitor.try_with_or_error begin fun () ->
-      Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+      Client.post ~body ~headers trading_uri >>= fun (resp, body) ->
       Body.to_string body >>| fun body_str ->
       Yojson.Safe.from_string ?buf body_str |> function
       | `Assoc ["error", `String msg] -> failwith msg (* OK here! *)
@@ -490,9 +494,10 @@ module Rest = struct
         "orderNumber", [Int.to_string id];
     ]
     in
-    let data_str, headers = sign ~key ~secret ~data in
+    let body, headers = sign ~key ~secret ~data in
+    let body = Body.of_string body in
     Monitor.try_with_or_error begin fun () ->
-      Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+      Client.post ~body ~headers trading_uri >>= fun (resp, body) ->
       Body.to_string body >>| fun body_str ->
       let resp = Yojson.Safe.from_string ?buf body_str in
       let resp = cancel_response_raw_of_yojson resp |> Result.ok_or_failwith in
@@ -507,9 +512,10 @@ module Rest = struct
         Option.map qty ~f:(fun a -> "amount", [a // 100_000_000 |> Float.to_string])
       ]
     in
-    let data_str, headers = sign ~key ~secret ~data in
+    let body, headers = sign ~key ~secret ~data in
+    let body = Body.of_string body in
     Monitor.try_with_or_error begin fun () ->
-      Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+      Client.post ~body ~headers trading_uri >>= fun (resp, body) ->
       Body.to_string body >>| fun body_str ->
       Yojson.Safe.from_string ?buf body_str |> function
       | resp -> match order_response_raw_of_yojson resp with
@@ -536,9 +542,10 @@ module Rest = struct
         (if post_only then Some ("postOnly", ["1"]) else None)
       ]
     in
-    let data_str, headers = sign ~key ~secret ~data in
+    let body, headers = sign ~key ~secret ~data in
+    let body = Body.of_string body in
     Monitor.try_with_or_error begin fun () ->
-      Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+      Client.post ~body ~headers trading_uri >>= fun (resp, body) ->
       Body.to_string body >>| fun body_str ->
       Yojson.Safe.from_string ?buf body_str |> function
       | `Assoc ["error", `String msg] -> failwith msg (* OK here! *)
@@ -553,9 +560,10 @@ module Rest = struct
       "currencyPair", [symbol];
     ]
     in
-    let data_str, headers = sign ~key ~secret ~data in
+    let body, headers = sign ~key ~secret ~data in
+    let body = Body.of_string body in
     Monitor.try_with_or_error begin fun () ->
-      Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+      Client.post ~body ~headers trading_uri >>= fun (resp, body) ->
       Body.to_string body >>| fun body_str ->
       let resp = Yojson.Safe.from_string ?buf body_str in
       match order_response_raw_of_yojson resp with
@@ -605,10 +613,11 @@ module Rest = struct
       "currencyPair", [symbol];
     ]
     in
-    let data_str, headers = sign ~key ~secret ~data in
+    let body, headers = sign ~key ~secret ~data in
+    let body = Body.of_string body in
     let map_f oo = oo |> open_orders_resp_raw_of_yojson |> Result.ok_or_failwith |> oo_of_oo_raw in
     Monitor.try_with_or_error begin fun () ->
-      Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+      Client.post ~body ~headers trading_uri >>= fun (resp, body) ->
       Body.to_string body >>| fun body_str ->
       Yojson.Safe.from_string ?buf body_str |> function
       | `Assoc ["error", `String msg] -> failwith msg
@@ -671,10 +680,11 @@ module Rest = struct
         Option.map stop ~f:(fun ts -> "end", [Int.to_string @@ Time_ns.to_int_ns_since_epoch ts / 1_000_000_000]);
     ]
     in
-    let data_str, headers = sign ~key ~secret ~data in
+    let body, headers = sign ~key ~secret ~data in
+    let body = Body.of_string body in
     let map_f oo = oo |> trade_history_raw_of_yojson |> Result.ok_or_failwith |> trade_history_of_raw in
     Monitor.try_with_or_error begin fun () ->
-      Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+      Client.post ~body ~headers trading_uri >>= fun (resp, body) ->
       Body.to_string body >>| fun body_str ->
       Yojson.Safe.from_string ?buf body_str |> function
       | `Assoc ["error", `String msg] -> failwith msg
@@ -722,10 +732,11 @@ module Rest = struct
 
   let margin_positions ?buf ?(symbol="all") ~key ~secret () =
     let data = ["command", ["getMarginPosition"]; "currencyPair", [symbol]] in
-    let data_str, headers = sign ~key ~secret ~data in
+    let body, headers = sign ~key ~secret ~data in
+    let body = Body.of_string body in
     let filter_map_f p = p |> margin_position_raw_of_yojson |> Result.ok_or_failwith |> margin_position_of_raw in
     Monitor.try_with_or_error begin fun () ->
-      Client.post ~body:(Body.of_string data_str) ~headers trading_uri >>= fun (resp, body) ->
+      Client.post ~body ~headers trading_uri >>= fun (resp, body) ->
       Body.to_string body >>| fun body_str ->
       Yojson.Safe.from_string ?buf body_str |> function
       | `Assoc ["error", `String msg] -> failwith msg
