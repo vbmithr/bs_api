@@ -9,9 +9,9 @@ module PLNX = Poloniex_api
 
 let default_cfg = Filename.concat (Option.value_exn (Sys.getenv "HOME")) ".virtu"
 let find_auth cfg exchange =
-  let cfg_sexp = Sexplib.Sexp.of_string cfg in
-  let cfg = Cfg.t_of_sexp cfg_sexp in
-  let { Cfg.key; secret } = List.Assoc.find_exn ~equal:String.equal cfg exchange in
+  let cfg = Sexplib.Sexp.load_sexp_conv_exn cfg Cfg.t_of_sexp in
+  let { Cfg.key; secret } =
+    List.Assoc.find_exn ~equal:String.equal cfg exchange in
   key, Cstruct.of_string secret
 
 let base_spec =
