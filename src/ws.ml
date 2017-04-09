@@ -118,7 +118,7 @@ let plnx key secret topics =
       match String.split s ~on:' ' with
       | ["positions"] ->
         Rest.margin_positions ~key ~secret () >>| begin function
-        | Error err -> error "%s" @@ Error.to_string_hum err
+        | Error err -> error "%s" @@ Rest.Http_error.to_string err
         | Ok resp ->
           let nb_nonempty = List.fold_left resp ~init:0 ~f:begin fun i (symbol, p) ->
               match p with
@@ -132,12 +132,12 @@ let plnx key secret topics =
         end
       | ["margin"] ->
         Rest.margin_account_summary ~key ~secret () >>| begin function
-        | Error err -> error "%s" @@ Error.to_string_hum err
+        | Error err -> error "%s" @@ Rest.Http_error.to_string err
         | Ok resp -> info "%s" (Rest.sexp_of_margin_account_summary resp |> Sexplib.Sexp.to_string)
         end
       | ["balance"; currency]  ->
         Rest.balances ~key ~secret () >>| begin function
-        | Error err -> error "%s" @@ Error.to_string_hum err
+        | Error err -> error "%s" (Rest.Http_error.to_string err)
         | Ok resp ->
           info "found %d balances" @@ List.length resp;
           match List.Assoc.find ~equal:String.equal resp currency with
@@ -146,7 +146,7 @@ let plnx key secret topics =
         end
       | ["balances"]  ->
         Rest.positive_balances ~key ~secret () >>| begin function
-        | Error err -> error "%s" @@ Error.to_string_hum err
+        | Error err -> error "%s" @@ Rest.Http_error.to_string err
         | Ok resp -> List.iter resp ~f:begin fun (account, bs) ->
             info "%s: %s"
               (Rest.sexp_of_account account |> Sexplib.Sexp.to_string)
@@ -164,19 +164,19 @@ let plnx key secret topics =
               else i
             end
           in if nb_nonempty = 0 then info "No open orders"
-        | Error err -> error "%s" @@ Error.to_string_hum err
+        | Error err -> error "%s" @@ Rest.Http_error.to_string err
         end
       | ["th"; symbol] ->
         Rest.trade_history ~symbol ~key ~secret () >>| begin function
         | Ok resp ->
           List.iter resp ~f:(fun (s, ths) -> info "%s: %s" s (Sexplib.Std.sexp_of_list Rest.sexp_of_trade_history ths |> Sexplib.Sexp.to_string))
-        | Error err -> error "%s" @@ Error.to_string_hum err
+        | Error err -> error "%s" @@ Rest.Http_error.to_string err
         end
       | ["cancel"; id] ->
         let id = Int.of_string id in
         Rest.cancel ~key ~secret id >>| begin function
         | Ok () -> info "canceled order %d OK" id
-        | Error err -> error "%s" @@ Error.to_string_hum err
+        | Error err -> error "%s" @@ Rest.Http_error.to_string err
         end
       | [side; symbol; price; qty] ->
         let side = match side with "buy" -> `Buy | "sell" -> `Sell | _ -> failwith "side" in
@@ -185,24 +185,24 @@ let plnx key secret topics =
         if margin_enabled symbol then
           Rest.margin_order ~key ~secret ~symbol ~side ~price ~qty () >>| begin function
           | Ok resp -> info "%s" (Rest.sexp_of_order_response resp |> Sexplib.Sexp.to_string)
-          | Error err -> error "%s" @@ Error.to_string_hum err
+          | Error err -> error "%s" @@ Rest.Http_error.to_string err
           end
         else
           Rest.order ~key ~secret ~symbol ~side ~price ~qty () >>| begin function
           | Ok resp -> info "%s" (Rest.sexp_of_order_response resp |> Sexplib.Sexp.to_string)
-          | Error err -> error "%s" @@ Error.to_string_hum err
+          | Error err -> error "%s" @@ Rest.Http_error.to_string err
           end
       | ["modify"; id; price] ->
         let id = Int.of_string id in
         let price = Int.of_string price in
         Rest.modify ~key ~secret ~price id >>| begin function
         | Ok resp -> info "%s" (Rest.sexp_of_order_response resp |> Sexplib.Sexp.to_string)
-        | Error err -> error "%s" @@ Error.to_string_hum err
+        | Error err -> error "%s" @@ Rest.Http_error.to_string err
         end
       | ["close"; symbol] ->
         Rest.close_position ~key ~secret symbol >>| begin function
         | Ok resp -> info "%s" (Rest.sexp_of_order_response resp |> Sexplib.Sexp.to_string)
-        | Error err -> error "%s" @@ Error.to_string_hum err
+        | Error err -> error "%s" @@ Rest.Http_error.to_string err
         end
       | h::t ->
         error "Unknown command %s" h; Deferred.unit
