@@ -274,6 +274,7 @@ module Ws = struct
     types: (Yojson.Safe.json [@default `Null]);
     foreignKeys: (Yojson.Safe.json [@default `Null]);
     attributes: (Yojson.Safe.json [@default `Null]);
+    filter: (Yojson.Safe.json [@default `Null]);
     action: string;
     data: Yojson.Safe.json list;
   } [@@deriving show, yojson]
