@@ -528,8 +528,8 @@ module Rest = struct
     let data = List.filter_opt [
         Some ("command", [match side with `Buy -> "buy" | `Sell -> "sell" ]);
         Some ("currencyPair", [symbol]);
-        Some ("rate", [Float.to_string @@ price // 100_000_000]);
-        Some ("amount", [Float.to_string @@ qty // 100_000_000]);
+        Some ("rate", [Float.to_string price]);
+        Some ("amount", [Float.to_string qty]);
         (match tif with
         | Some `Fill_or_kill -> Some ("fillOrKill", ["1"])
         | Some `Immediate_or_cancel -> Some ("immediateOrCancel", ["1"])
@@ -570,8 +570,8 @@ module Rest = struct
     let data = List.filter_opt [
         Some ("command", ["moveOrder"]);
         Some ("orderNumber", [Int.to_string id]);
-        Some ("rate", [price // 100_000_000 |> Float.to_string]);
-        Option.map qty ~f:(fun a -> "amount", [a // 100_000_000 |> Float.to_string])
+        Some ("rate", [Float.to_string price]);
+        Option.map qty ~f:(fun amount -> "amount", [Float.to_string amount])
       ]
     in
     let body, headers = sign ~key ~secret ~data in
@@ -591,8 +591,8 @@ module Rest = struct
     let data = List.filter_opt [
         Some ("command", [match side with `Buy -> "marginBuy" | `Sell -> "marginSell" ]);
         Some ("currencyPair", [symbol]);
-        Some ("rate", [Float.to_string @@ price // 100_000_000]);
-        Some ("amount", [Float.to_string @@ qty // 100_000_000]);
+        Some ("rate", [Float.to_string price]);
+        Some ("amount", [Float.to_string qty]);
         Option.map max_lending_rate ~f:(fun r -> "lendingRate", [Float.to_string r]);
         (match tif with
         | Some `Fill_or_kill -> Some ("fillOrKill", ["1"])
