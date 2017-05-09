@@ -19,7 +19,7 @@ depends: [
   "nocrypto"
   "hex"
   "cohttp"
-  "websocket"
+  "websocket-async"
   "msgpck"
   "wamp"
   "jsonm"
