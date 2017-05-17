@@ -5,24 +5,6 @@ open Bs_devkit
 
 type side = [`Buy | `Sell] [@@deriving sexp]
 
-module Msgpck_sexp = struct
-  type t = Msgpck.t =
-    | Nil
-    | Bool of bool
-    | Int of int
-    | Uint32 of int32
-    | Int32 of int32
-    | Uint64 of int64
-    | Int64 of int64
-    | Float32 of int32
-    | Float of float
-    | String of string
-    | Bytes of string
-    | Ext of int * string
-    | List of t list
-    | Map of (t * t) list [@@deriving sexp]
-end
-
 let margin_enabled = function
 | "BTC_XMR"
 | "BTC_ETH"

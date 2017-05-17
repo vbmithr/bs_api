@@ -220,13 +220,11 @@ let plnx key secret topics =
     Deferred.Queue.filter_map q ~f:begin function
     | Wamp.Welcome _ as msg ->
       PLNX.Ws.Msgpck.subscribe to_ws_w topics >>| fun _req_ids ->
-      msg |> Wamp_msgpck.msg_to_msgpck |>
-      Msgpck_sexp.sexp_of_t |> fun msg_str ->
-      Option.some @@ Sexplib.Sexp.to_string_hum msg_str ^ "\n";
+      msg |> Wamp_msgpck.msg_to_msgpck |> fun msgpck ->
+      Some (Format.asprintf "%a@." Msgpck.pp msgpck)
     | msg ->
-      msg |> Wamp_msgpck.msg_to_msgpck |>
-      Msgpck_sexp.sexp_of_t |> fun msg_str ->
-      return @@ Option.some @@ Sexplib.Sexp.to_string_hum msg_str ^ "\n";
+      msg |> Wamp_msgpck.msg_to_msgpck |> fun msgpck ->
+      return (Some (Format.asprintf "%a@." Msgpck.pp msgpck))
     end
   in
   Deferred.all_unit [
